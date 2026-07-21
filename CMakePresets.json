@@ -1,0 +1,94 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "vs2022-base",
+      "hidden": true,
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_CXX_STANDARD": "20",
+        "VCPKG_TARGET_TRIPLET": "x64-windows"
+      }
+    },
+    {
+      "name": "vs2022-x64",
+      "inherits": "vs2022-base",
+      "displayName": "Visual Studio 2022 x64",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+    },
+    {
+      "name": "vs2022-x64-debug",
+      "inherits": "vs2022-x64",
+      "displayName": "Visual Studio 2022 x64 Debug"
+    },
+    {
+      "name": "vs2022-x64-release",
+      "inherits": "vs2022-x64",
+      "displayName": "Visual Studio 2022 x64 Release"
+    },
+    {
+      "name": "repo-vs2022-x64",
+      "inherits": "vs2022-base",
+      "displayName": "Visual Studio 2022 x64 (repository-local vcpkg)",
+      "toolchainFile": "${sourceDir}/.tools/vcpkg/scripts/buildsystems/vcpkg.cmake"
+    },
+    {
+      "name": "vs2022-core-tests",
+      "inherits": "vs2022-base",
+      "displayName": "Visual Studio 2022 x64 (core tests only)",
+      "binaryDir": "${sourceDir}/build/${presetName}-msbuild",
+      "cacheVariables": {
+        "OPENCAPTURE_BUILD_APP": "OFF",
+        "OPENCAPTURE_BUILD_TESTS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "vs2022-x64-debug",
+      "configurePreset": "vs2022-x64",
+      "configuration": "Debug"
+    },
+    {
+      "name": "vs2022-x64-release",
+      "configurePreset": "vs2022-x64",
+      "configuration": "Release"
+    },
+    {
+      "name": "repo-vs2022-x64-debug",
+      "configurePreset": "repo-vs2022-x64",
+      "configuration": "Debug"
+    },
+    {
+      "name": "repo-vs2022-x64-release",
+      "configurePreset": "repo-vs2022-x64",
+      "configuration": "Release"
+    },
+    {
+      "name": "vs2022-core-tests",
+      "configurePreset": "vs2022-core-tests",
+      "configuration": "Debug"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "vs2022-core-tests",
+      "configurePreset": "vs2022-core-tests",
+      "configuration": "Debug",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "repo-vs2022-x64-debug",
+      "configurePreset": "repo-vs2022-x64",
+      "configuration": "Debug",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}
