@@ -1,21 +1,58 @@
 # OpenCapture
 
-OpenCapture is a Windows 10/11 native screen capture application under active development. It is designed around a GPU-first path: Windows Graphics Capture or Desktop Duplication produces D3D11 textures, GPU shaders prepare frames, and FFmpeg hardware encoders write the result without a per-frame full-image CPU round trip.
+[English](README.en.md) | **한국어**
 
-The current milestone provides the C++20 project foundation, module boundaries, Win32/D3D11/ImGui shell, FFmpeg runtime diagnostics, capture target model, recording state machine, and a bounded drop-oldest video queue.
+OpenCapture는 Windows 10/11을 위한 네이티브 화면 캡처 애플리케이션입니다. 화면 캡처부터 색상 변환, 크기 조절, 하드웨어 인코딩까지 가능한 한 GPU 안에서 처리하여 매 프레임 전체 이미지를 CPU 메모리로 복사하지 않는 고성능 녹화 경로를 목표로 합니다.
 
-## Prerequisites
+현재는 활발히 개발 중인 초기 단계입니다. C++20 프로젝트 기반, Win32/D3D11/Dear ImGui 애플리케이션 셸, FFmpeg 런타임 진단, 캡처 대상 모델, 녹화 상태 머신과 지연이 누적되지 않도록 오래된 프레임을 버리는 제한 큐가 구현되어 있습니다. 실제 화면 캡처와 녹화 버튼은 후속 마일스톤에서 연결될 예정입니다.
 
-- Windows 10 version 1903 or newer, or Windows 11
-- Visual Studio 2022 Build Tools 17.14 or newer with **Desktop development with C++** and CMake tools
-- CMake 3.21 or newer (included with the Visual Studio component above)
+## 주요 목표
+
+- Windows Graphics Capture와 Desktop Duplication을 상황에 맞게 사용
+- D3D11 텍스처를 유지하는 GPU 중심 영상 처리
+- NVIDIA NVENC, Intel Quick Sync, AMD AMF 등 FFmpeg 하드웨어 인코더 활용
+- 모니터, 창, 영역 캡처와 스크린샷 지원
+- WASAPI 기반 시스템·마이크 오디오 캡처 및 동기화
+- 장시간 녹화에서도 메모리와 지연이 계속 증가하지 않는 제한된 파이프라인
+- 캡처·그래픽·인코딩·UI를 분리하여 테스트와 유지보수가 쉬운 구조
+
+## 현재 구현 상태
+
+구현됨:
+
+- CMake 및 vcpkg 기반 C++20 프로젝트
+- Win32 창과 D3D11 디바이스 초기화
+- Dear ImGui 사용자 인터페이스 셸
+- FFmpeg 연결 상태 및 런타임 버전 표시
+- 캡처 대상과 녹화 세션 상태 모델
+- drop-oldest 정책을 사용하는 제한 큐
+- 핵심 모델 단위 테스트와 Windows GitHub Actions CI
+
+아직 구현되지 않음:
+
+- 실제 화면·창·영역 프레임 수집
+- GPU 색상 변환 및 스케일링
+- 하드웨어 인코딩과 파일 저장
+- 오디오 캡처·믹싱·동기화
+- 스크린샷, 클립보드, 단축키와 트레이 기능
+
+전체 개발 순서와 성능 기준은 [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md)에서 확인할 수 있습니다.
+
+## 개발 환경 요구 사항
+
+- Windows 10 버전 1903 이상 또는 Windows 11
+- Visual Studio 2022 Build Tools 17.14 이상
+  - **Desktop development with C++** 워크로드
+  - MSVC v143, Windows SDK, CMake 도구
+- CMake 3.21 이상
 - Git for Windows
+- 인터넷 연결: 최초 설정 시 vcpkg와 C++ 의존성을 내려받는 데 필요
 
-Do not put credentials or machine-specific paths in the repository. OpenCapture currently requires no credentials.
+OpenCapture 자체에는 API 키나 계정 정보가 필요하지 않습니다. 인증정보나 PC별 절대 경로는 저장소에 커밋하지 마세요.
 
-## Quick start on a new PC
+## 새 PC에서 빠르게 시작하기
 
-Clone the repository and run the setup script from a regular PowerShell terminal:
+일반 PowerShell에서 다음 명령을 실행합니다.
 
 ```powershell
 git clone https://github.com/CharlieYang0040/OpenCapture.git
@@ -23,23 +60,82 @@ cd OpenCapture
 powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1
 ```
 
-The script downloads the pinned vcpkg revision into the ignored `.tools` directory, installs dependencies, builds the Debug configuration, and runs the tests.
+`setup.ps1`은 다음 작업을 순서대로 수행합니다.
 
-To prepare dependencies without building, or to build Release:
+1. Git과 CMake가 설치되어 있는지 확인합니다.
+2. 저장소에 고정된 버전의 vcpkg를 `.tools/vcpkg`에 내려받습니다.
+3. vcpkg를 부트스트랩하고 `vcpkg.json`의 Dear ImGui와 FFmpeg를 설치합니다.
+4. Visual Studio에 포함된 Ninja를 `.tools/ninja`에 준비합니다.
+5. x64 MSVC 컴파일러와 링커 환경을 불러옵니다.
+6. CMake의 Ninja 생성기로 프로젝트를 구성합니다.
+7. Ninja가 MSVC 컴파일러와 링커를 호출하여 Debug 구성을 빌드하고 핵심 테스트를 실행합니다.
+
+완료 후 실행 파일은 다음 위치에 생성됩니다.
+
+```text
+build/repo-ninja-x64-debug/OpenCapture.exe
+```
+
+Release 빌드 또는 도구만 준비하려면 다음 옵션을 사용합니다.
+
+```powershell
+.\scripts\setup.ps1 -Configuration Release
+.\scripts\setup.ps1 -SkipBuild
+```
+
+### 빌드 흐름
+
+```text
+C++ 소스 코드
+  ↓
+CMake가 빌드 방법 구성
+  ↓
+vcpkg가 Dear ImGui·FFmpeg 준비
+  ↓
+Ninja가 컴파일 작업 실행
+  ↓
+MSVC가 C++ 파일 컴파일
+  ↓
+MSVC Linker가 EXE·DLL 연결
+  ↓
+OpenCapture.exe 생성
+```
+
+`setup.ps1`은 Visual Studio에 포함된 Ninja를 저장소 로컬 도구 폴더에 복사해 사용하므로 Ninja를 별도로 설치할 필요는 없습니다.
+
+## 직접 빌드하기
+
+### 저장소 로컬 vcpkg 사용
+
+먼저 일반 PowerShell에서 도구를 준비합니다. 이후의 CMake 명령은 **x64 Native Tools Command Prompt for VS 2022** 또는 동일한 MSVC 환경이 설정된 터미널에서 실행합니다.
 
 ```powershell
 .\scripts\setup.ps1 -SkipBuild
-.\scripts\setup.ps1 -Configuration Release
+cmake --preset repo-ninja-x64-debug
+cmake --build --preset repo-ninja-x64-debug
+ctest --preset repo-ninja-x64-debug
 ```
 
-If vcpkg is already installed globally, set `VCPKG_ROOT` and use the shared preset:
+Release 구성은 다음과 같습니다.
 
 ```powershell
-cmake --preset vs2022-x64
+cmake --preset repo-ninja-x64-release
+cmake --build --preset repo-ninja-x64-release
+```
+
+### 전역 vcpkg 사용
+
+이미 설치한 vcpkg가 있다면 `VCPKG_ROOT`를 설정하고 다음 프리셋을 사용합니다.
+
+```powershell
+$env:VCPKG_ROOT = "C:\path\to\vcpkg"
+cmake --preset vs2022-x64-debug
 cmake --build --preset vs2022-x64-debug
 ```
 
-For a dependency-free core-only build and test:
+### 외부 의존성 없이 핵심 테스트만 실행
+
+애플리케이션과 FFmpeg/ImGui를 제외한 핵심 라이브러리만 빠르게 검증할 수 있습니다.
 
 ```powershell
 cmake --preset vs2022-core-tests
@@ -47,25 +143,55 @@ cmake --build --preset vs2022-core-tests
 ctest --preset vs2022-core-tests
 ```
 
-Run `build/repo-vs2022-x64/Debug/OpenCapture.exe`. The initial application window reports the active D3D11 adapter and linked FFmpeg version. Capture buttons are deliberately inactive until the capture milestone is implemented.
+## 빌드 시스템과 의존성
 
-Machine-specific CMake overrides belong in `CMakeUserPresets.json`, which is intentionally ignored. Build outputs, downloaded dependencies, editor settings, environment files, and signing keys are also excluded from Git.
+- 기본 생성기: Ninja
+- 기본 아키텍처: x64
+- 언어 표준: C++20
+- 패키지 관리자: vcpkg manifest mode
+- 주요 라이브러리: Dear ImGui, FFmpeg
+- Windows API: Win32, D3D11, DXGI, DWM
+- 컴파일러·링커: MSVC v143
 
-## Architecture
+vcpkg 기준 커밋은 `vcpkg.json`과 `scripts/setup.ps1`에 고정되어 있어 다른 PC에서도 같은 의존성 기준을 사용합니다. PC별 CMake 설정은 Git에서 제외된 `CMakeUserPresets.json`에 작성할 수 있습니다.
 
-- `app`: composition root and process entry point
-- `core`: target model, session lifecycle, settings, clocks, and queues
-- `capture`: Windows Graphics Capture and Desktop Duplication implementations
-- `graphics`: D3D11 crop, scale, color conversion, and HDR processing
-- `audio`: WASAPI capture, mixing, and clock synchronization
-- `encoding`: FFmpeg encoders, hardware selection, and muxing
-- `image`: WIC image saving and clipboard integration
-- `ui`: presentation and command dispatch only
-- `platform`: Win32, D3D11, DPI, tray, and hotkey integration
-- `tests`: deterministic unit, integration, soak, and performance tests
+## 프로젝트 구조
 
-The detailed roadmap and performance acceptance criteria are in [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md).
+```text
+OpenCapture/
+├─ app/        프로그램 진입점과 객체 조립
+├─ core/       캡처 대상, 세션 상태와 제한 큐
+├─ platform/   Win32 창, D3D11, DPI 등 플랫폼 코드
+├─ ui/         Dear ImGui 화면과 명령 전달
+├─ tests/      핵심 로직 자동 테스트
+├─ scripts/    새 개발 PC 설정 스크립트
+└─ .github/    GitHub Actions CI 설정
+```
 
-## License
+향후 `capture`, `graphics`, `audio`, `encoding`, `image` 모듈이 개발 계획에 따라 추가될 예정입니다. UI 계층은 표시와 명령 전달만 담당하고, 캡처와 인코딩 로직은 독립 모듈로 유지하는 것이 기본 원칙입니다.
 
-OpenCapture source code is licensed under the MIT License. Distributed builds must also include notices for their exact FFmpeg, Dear ImGui, and hardware SDK configuration. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+## 문제 해결
+
+### Ninja 또는 MSVC를 찾지 못하는 경우
+
+Visual Studio Installer에서 **Desktop development with C++** 워크로드와 CMake 도구가 설치되어 있는지 확인하세요. `setup.ps1`은 해당 CMake 구성요소에 포함된 Ninja와 MSVC 개발 환경을 사용합니다. 설치 후 새 PowerShell 창을 열고 다시 실행하세요.
+
+### 최초 설정 시간이 오래 걸리는 경우
+
+FFmpeg를 포함한 의존성을 소스에서 준비하므로 첫 빌드는 오래 걸릴 수 있습니다. `.tools`, `build`, `vcpkg_installed`는 로컬 캐시·산출물이며 Git에 커밋되지 않습니다.
+
+### 기존 CMake 캐시와 생성기가 충돌하는 경우
+
+다른 생성기로 만든 동일한 빌드 디렉터리를 재사용하면 충돌할 수 있습니다. 공용 프리셋은 각각 별도 빌드 경로를 사용합니다. 직접 생성기를 바꿀 때도 새 빌드 디렉터리를 사용하세요.
+
+## 기여 및 개발 원칙
+
+- 변경 전후에 관련 테스트를 실행합니다.
+- GPU 경로에서 불필요한 전체 프레임 CPU 복사를 추가하지 않습니다.
+- 큐는 무제한으로 커지지 않도록 용량과 과부하 정책을 명시합니다.
+- 빌드 산출물, 내려받은 패키지, 에디터 설정, 환경 파일과 서명 키는 커밋하지 않습니다.
+- 배포 파일에는 실제 사용한 FFmpeg, Dear ImGui 및 하드웨어 SDK 고지를 포함합니다.
+
+## 라이선스
+
+OpenCapture 소스 코드는 [MIT License](LICENSE)로 배포됩니다. 제3자 구성요소 관련 내용은 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)를 참고하세요.
