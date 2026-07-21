@@ -11,7 +11,7 @@ jobs:
   core-tests:
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Configure
         run: cmake --preset vs2022-core-tests
       - name: Build
