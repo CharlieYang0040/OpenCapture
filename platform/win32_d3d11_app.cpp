@@ -20,6 +20,7 @@ extern "C" {
 #include <stdexcept>
 #include <winrt/base.h>
 #include <ShlObj.h>
+#include <ShObjIdl.h>
 #include <wincodec.h>
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
@@ -78,6 +79,25 @@ std::wstring ToWide(std::string_view text) {
     return result;
 }
 
+std::filesystem::path OutputSettingsPath() {
+    PWSTR localAppData{};
+    if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_CREATE, nullptr, &localAppData))) return {};
+    std::filesystem::path directory(localAppData);
+    CoTaskMemFree(localAppData);
+    directory /= L"OpenCapture";
+    std::error_code error;
+    std::filesystem::create_directories(directory, error);
+    return error ? std::filesystem::path{} : directory / L"output_directory.txt";
+}
+
+std::filesystem::path DefaultOutputDirectory() {
+    PWSTR videos{};
+    if (FAILED(SHGetKnownFolderPath(FOLDERID_Videos, KF_FLAG_CREATE, nullptr, &videos))) return {};
+    std::filesystem::path directory(videos);
+    CoTaskMemFree(videos);
+    return directory / L"OpenCapture";
+}
+
 } // namespace
 
 Win32D3D11App::~Win32D3D11App() { Shutdown(); }
@@ -113,7 +133,7 @@ bool Win32D3D11App::Initialize(HINSTANCE instance, int showCommand) {
     if (!RegisterClassExW(&windowClass)) return false;
 
     window_ = CreateWindowW(kWindowClass, L"OpenCapture", WS_OVERLAPPEDWINDOW,
-                            CW_USEDEFAULT, CW_USEDEFAULT, 720, 520, nullptr, nullptr, instance_, this);
+                            CW_USEDEFAULT, CW_USEDEFAULT, 860, 800, nullptr, nullptr, instance_, this);
     if (!window_ || !CreateDeviceAndSwapChain() || !frameProcessor_.Initialize(device_.Get(), context_.Get())) return false;
 
     IMGUI_CHECKVERSION();
@@ -127,6 +147,7 @@ bool Win32D3D11App::Initialize(HINSTANCE instance, int showCommand) {
     ffmpegVersion_ = av_version_info();
     encoderRegistry_.Probe(adapterVendorId_);
     encoderSummary_ = encoderRegistry_.Summary();
+    if (!InitializeOutputDirectory()) return false;
     ScanRecoverableRecordings();
     initialized_ = true;
     ShowWindow(window_, showCommand);
@@ -267,11 +288,7 @@ std::string Win32D3D11App::MakeRecordingPath() const {
         }
         return {};
     }
-    PWSTR videosPath{};
-    if (FAILED(SHGetKnownFolderPath(FOLDERID_Videos, KF_FLAG_CREATE, nullptr, &videosPath))) return {};
-    std::filesystem::path directory(videosPath);
-    CoTaskMemFree(videosPath);
-    directory /= L"OpenCapture";
+    std::filesystem::path directory(outputDirectory_);
     std::error_code error;
     std::filesystem::create_directories(directory, error);
     if (error) return {};
@@ -333,12 +350,105 @@ bool Win32D3D11App::CommitRecordingFile() {
     return true;
 }
 
+bool Win32D3D11App::InitializeOutputDirectory() {
+    std::filesystem::path selected;
+    if (const auto environment = ReadEnvironmentWide(L"OPENCAPTURE_OUTPUT_DIR"); !environment.empty()) {
+        selected = environment;
+    } else {
+        const auto settingsPath = OutputSettingsPath();
+        std::ifstream input(settingsPath, std::ios::binary);
+        std::string saved((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+        while (!saved.empty() && (saved.back() == '\r' || saved.back() == '\n')) saved.pop_back();
+        if (!saved.empty()) selected = std::filesystem::path(ToWide(saved));
+    }
+    if (selected.empty()) selected = DefaultOutputDirectory();
+    std::error_code error;
+    std::filesystem::create_directories(selected, error);
+    if (error) {
+        selected = DefaultOutputDirectory();
+        error.clear();
+        std::filesystem::create_directories(selected, error);
+    }
+    if (selected.empty() || error) {
+        frameProcessingError_ = "Could not create the output folder.";
+        return false;
+    }
+    outputDirectory_ = selected.wstring();
+    outputDirectoryUtf8_ = ToUtf8(outputDirectory_.c_str());
+    return true;
+}
+
+bool Win32D3D11App::SaveOutputDirectory() const {
+    const auto settingsPath = OutputSettingsPath();
+    if (settingsPath.empty()) return false;
+    const auto temporary = settingsPath.wstring() + L".tmp";
+    std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+    output << outputDirectoryUtf8_ << '\n';
+    output.close();
+    if (!output) return false;
+    std::error_code error;
+    std::filesystem::rename(temporary, settingsPath, error);
+    if (error) {
+        std::filesystem::remove(settingsPath, error);
+        error.clear();
+        std::filesystem::rename(temporary, settingsPath, error);
+    }
+    return !error;
+}
+
+bool Win32D3D11App::ChooseOutputDirectory() {
+    Microsoft::WRL::ComPtr<IFileOpenDialog> dialog;
+    HRESULT result = CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+                                      IID_PPV_ARGS(&dialog));
+    if (FAILED(result)) {
+        frameProcessingError_ = "Could not open the output folder picker.";
+        return false;
+    }
+    DWORD options{};
+    dialog->GetOptions(&options);
+    dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
+    dialog->SetTitle(L"Choose OpenCapture output folder");
+    Microsoft::WRL::ComPtr<IShellItem> current;
+    if (!outputDirectory_.empty() &&
+        SUCCEEDED(SHCreateItemFromParsingName(outputDirectory_.c_str(), nullptr, IID_PPV_ARGS(&current)))) {
+        dialog->SetFolder(current.Get());
+    }
+    result = dialog->Show(window_);
+    if (result == HRESULT_FROM_WIN32(ERROR_CANCELLED)) return false;
+    if (FAILED(result)) {
+        frameProcessingError_ = "Could not select the output folder.";
+        return false;
+    }
+    Microsoft::WRL::ComPtr<IShellItem> item;
+    PWSTR selectedPath{};
+    if (FAILED(dialog->GetResult(&item)) ||
+        FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &selectedPath)) || !selectedPath) {
+        if (selectedPath) CoTaskMemFree(selectedPath);
+        frameProcessingError_ = "The selected output location is not a filesystem folder.";
+        return false;
+    }
+    std::filesystem::path selected(selectedPath);
+    CoTaskMemFree(selectedPath);
+    std::error_code error;
+    std::filesystem::create_directories(selected, error);
+    if (error) {
+        frameProcessingError_ = "Could not use the selected output folder.";
+        return false;
+    }
+    outputDirectory_ = selected.wstring();
+    outputDirectoryUtf8_ = ToUtf8(outputDirectory_.c_str());
+    if (!SaveOutputDirectory()) {
+        frameProcessingError_ = "The output folder works, but the preference could not be saved.";
+        return false;
+    }
+    frameProcessingError_.clear();
+    ScanRecoverableRecordings();
+    return true;
+}
+
 void Win32D3D11App::ScanRecoverableRecordings() {
     recoveryStatus_.clear();
-    PWSTR videosPath{};
-    if (FAILED(SHGetKnownFolderPath(FOLDERID_Videos, KF_FLAG_DEFAULT, nullptr, &videosPath))) return;
-    const std::filesystem::path directory = std::filesystem::path(videosPath) / L"OpenCapture";
-    CoTaskMemFree(videosPath);
+    const std::filesystem::path directory(outputDirectory_);
     std::error_code error;
     if (!std::filesystem::exists(directory, error) || error) return;
     std::size_t count{};
@@ -350,24 +460,29 @@ void Win32D3D11App::ScanRecoverableRecordings() {
     }
     if (count > 0) {
         recoveryStatus_ = std::to_string(count) +
-            " recoverable .part.mkv recording(s) found in Videos/OpenCapture.";
+            " recoverable .part.mkv recording(s) found in the output folder.";
     }
 }
 
 std::wstring Win32D3D11App::MakeScreenshotPath() const {
-    PWSTR picturesPath{};
-    if (FAILED(SHGetKnownFolderPath(FOLDERID_Pictures, KF_FLAG_CREATE, nullptr, &picturesPath))) return {};
-    std::filesystem::path directory(picturesPath);
-    CoTaskMemFree(picturesPath);
-    directory /= L"OpenCapture";
+    std::filesystem::path directory(outputDirectory_);
+    std::error_code error;
+    std::filesystem::create_directories(directory, error);
+    if (error) return {};
     SYSTEMTIME time{};
     GetLocalTime(&time);
     wchar_t fileName[96]{};
     swprintf_s(fileName, L"OpenCapture_%04u%02u%02u_%02u%02u%02u_%03u.png",
                time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute,
                time.wSecond, time.wMilliseconds);
-    directory /= fileName;
-    return directory.wstring();
+    const auto base = directory / fileName;
+    if (!std::filesystem::exists(base)) return base.wstring();
+    for (int suffix = 1; suffix < 1000; ++suffix) {
+        const auto candidate = directory /
+            (base.stem().wstring() + L"_" + std::to_wstring(suffix) + base.extension().wstring());
+        if (!std::filesystem::exists(candidate)) return candidate.wstring();
+    }
+    return {};
 }
 
 bool Win32D3D11App::StartScreenshot(ScreenshotDestination destination) {
@@ -941,8 +1056,9 @@ void Win32D3D11App::Render() {
         }
     }
     const auto command = MainPanel::Draw(gpuName_, ffmpegVersion_, encoderSummary_, encoderChoices, frameProcessingError_,
-                                         screenshotStatus_, audioStatus_, recoveryStatus_,
+                                         screenshotStatus_, audioStatus_, recoveryStatus_, outputDirectoryUtf8_,
                                          recordingUi, targetPicker_, capture_, window_, device_.Get());
+    if (command.chooseOutputDirectory && !RecordingActive()) ChooseOutputDirectory();
     if (command.startRecording) {
         StartRecording(command.framesPerSecond, command.quality, command.encoderName,
                        command.systemAudio, command.microphone);

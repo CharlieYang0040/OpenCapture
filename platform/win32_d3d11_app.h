@@ -54,6 +54,9 @@ private:
     [[nodiscard]] std::string MakeWorkingRecordingPath(const std::string& finalPath) const;
     bool HasRecordingSpace(const std::string& path, std::uint64_t minimumBytes);
     bool CommitRecordingFile();
+    bool InitializeOutputDirectory();
+    bool ChooseOutputDirectory();
+    bool SaveOutputDirectory() const;
     void ScanRecoverableRecordings();
     [[nodiscard]] std::wstring MakeScreenshotPath() const;
     bool StartScreenshot(ScreenshotDestination destination);
@@ -80,6 +83,8 @@ private:
     std::string screenshotStatus_;
     std::string audioStatus_;
     std::string recoveryStatus_;
+    std::wstring outputDirectory_;
+    std::string outputDirectoryUtf8_;
     std::optional<ScreenshotDestination> pendingScreenshot_;
     bool screenshotOwnsCapture_{};
     std::uint32_t adapterVendorId_{};

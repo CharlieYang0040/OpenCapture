@@ -91,6 +91,7 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
                                  std::string_view screenshotStatus,
                                  std::string_view audioStatus,
                                  std::string_view recoveryStatus,
+                                 std::string_view outputDirectory,
                                  const RecordingUiState& recording,
                                  CaptureTargetPicker& picker, WindowsGraphicsCapture& capture,
                                  HWND owner, ID3D11Device* device) {
@@ -293,6 +294,22 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     }
 
     ImGui::Spacing();
+    ImGui::SeparatorText("Output");
+    ImGui::TextWrapped("Screenshots and video recordings are saved in the same folder.");
+    ImGui::TextWrapped("Folder: %.*s", static_cast<int>(outputDirectory.size()), outputDirectory.data());
+    if (recording.active) ImGui::BeginDisabled();
+    if (ImGui::Button("Change output folder...", ImVec2(210.0F, 32.0F))) {
+        command.chooseOutputDirectory = true;
+    }
+    if (recording.active) {
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            ImGui::SetTooltip("Stop recording before changing the output folder.");
+        }
+    }
+
+    ImGui::Spacing();
+    ImGui::SeparatorText("Diagnostics");
     if (recording.active) {
         ImGui::Text("Recording pipeline: %s", recording.starting ? "starting" : "active");
     } else if (!capture.IsRunning()) {
@@ -314,22 +331,35 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     }
 
     ImGui::Spacing();
-    if (ImGui::Button("Copy capture", ImVec2(120.0F, 40.0F))) command.copyScreenshot = true;
+    ImGui::SeparatorText("Screenshot");
+    ImGui::TextUnformatted("Capture one still image from the selected target.");
+    if (ImGui::Button("Copy to clipboard", ImVec2(155.0F, 42.0F))) command.copyScreenshot = true;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Copy the screenshot only. No file is created.");
     ImGui::SameLine();
-    if (ImGui::Button("Save PNG", ImVec2(105.0F, 40.0F))) command.saveScreenshot = true;
+    if (ImGui::Button("Save PNG file", ImVec2(140.0F, 42.0F))) command.saveScreenshot = true;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Save a PNG in the output folder.");
     ImGui::SameLine();
-    if (ImGui::Button("Save + copy", ImVec2(120.0F, 40.0F))) command.saveAndCopyScreenshot = true;
+    if (ImGui::Button("Save PNG + copy", ImVec2(155.0F, 42.0F))) command.saveAndCopyScreenshot = true;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Save a PNG and also copy it to the clipboard.");
     if (!screenshotStatus.empty()) {
         ImGui::TextWrapped("%.*s", static_cast<int>(screenshotStatus.size()), screenshotStatus.data());
     }
+
     ImGui::Spacing();
-    ImGui::Button("GIF", ImVec2(100.0F, 40.0F));
-    ImGui::SameLine();
+    ImGui::SeparatorText("Video");
+    ImGui::TextUnformatted("Record the selected target with the FPS, quality, and audio options above.");
     if (recording.active) {
-        if (ImGui::Button("Stop recording", ImVec2(170.0F, 40.0F))) command.stopRecording = true;
-    } else if (ImGui::Button("Start recording", ImVec2(170.0F, 40.0F))) {
+        if (ImGui::Button("Stop video recording", ImVec2(205.0F, 44.0F))) command.stopRecording = true;
+    } else if (ImGui::Button("Start video recording", ImVec2(205.0F, 44.0F))) {
         command.startRecording = true;
         if (selectedEncoder > 0) command.encoderName = encoderChoices[static_cast<std::size_t>(selectedEncoder - 1)].name;
+    }
+    ImGui::SameLine();
+    ImGui::BeginDisabled();
+    ImGui::Button("Record GIF (coming soon)", ImVec2(205.0F, 44.0F));
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+        ImGui::SetTooltip("GIF recording is planned but not implemented yet.");
     }
     if (recording.active || !recording.outputPath.empty()) {
         ImGui::Text("Recorded: %llu frames | %.2f s",

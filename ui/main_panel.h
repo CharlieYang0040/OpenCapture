@@ -31,6 +31,7 @@ struct EncoderUiChoice {
 };
 
 struct MainPanelCommand {
+    bool chooseOutputDirectory{};
     bool startRecording{};
     bool stopRecording{};
     bool copyScreenshot{};
@@ -52,6 +53,7 @@ public:
                                  std::string_view screenshotStatus,
                                  std::string_view audioStatus,
                                  std::string_view recoveryStatus,
+                                 std::string_view outputDirectory,
                                  const RecordingUiState& recording,
                                  CaptureTargetPicker& picker, WindowsGraphicsCapture& capture,
                                  HWND owner, ID3D11Device* device);

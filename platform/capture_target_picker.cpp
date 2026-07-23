@@ -190,7 +190,6 @@ LRESULT CALLBACK OverlayProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
         return 0;
     }
     case WM_DESTROY:
-        PostQuitMessage(0);
         return 0;
     }
     return DefWindowProcW(window, message, wParam, lParam);
@@ -226,6 +225,7 @@ bool RunRegionOverlay(HWND owner, const RECT* initialRegion, RECT& result) {
         DispatchMessageW(&message);
     }
     UnregisterClassW(className, cls.hInstance);
+    if (IsWindow(owner)) SetForegroundWindow(owner);
     if (!state.accepted) return false;
     result = state.result;
     return true;
@@ -484,6 +484,10 @@ void CaptureTargetPicker::Load() {
             return item.title == windowTitle && item.processName == windowProcess;
         });
         if (found != windows_.end()) selected_.window = found->handle;
+    } else if (selected_.type == CaptureTargetType::Region &&
+               selected_.region.right > selected_.region.left &&
+               selected_.region.bottom > selected_.region.top) {
+        selected_.monitor = MonitorFromRect(&selected_.region, MONITOR_DEFAULTTONEAREST);
     }
     if (!selected_.IsValid() && !monitors_.empty()) {
         const auto primary = std::find_if(monitors_.begin(), monitors_.end(), [](const auto& item) { return item.primary; });
