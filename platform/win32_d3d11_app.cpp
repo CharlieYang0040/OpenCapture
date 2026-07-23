@@ -58,6 +58,15 @@ std::wstring ReadEnvironmentWide(const wchar_t* name) {
     return length > 0 && length < value.size() ? std::wstring(value.data(), length) : std::wstring{};
 }
 
+std::uint64_t QpcTo100ns(std::int64_t qpc, std::int64_t frequency) {
+    if (qpc <= 0 || frequency <= 0) return 0;
+    const auto seconds = qpc / frequency;
+    const auto remainder = qpc % frequency;
+    return static_cast<std::uint64_t>(seconds) * 10'000'000ULL +
+           static_cast<std::uint64_t>(remainder) * 10'000'000ULL /
+               static_cast<std::uint64_t>(frequency);
+}
+
 } // namespace
 
 Win32D3D11App::~Win32D3D11App() { Shutdown(); }
@@ -72,6 +81,8 @@ bool Win32D3D11App::Initialize(HINSTANCE instance, int showCommand) {
     recordSmokeMode_ = std::wcsstr(GetCommandLineW(), L"--record-smoke") != nullptr;
     realtimeRecordSmokeMode_ = std::wcsstr(GetCommandLineW(), L"--realtime-record-smoke") != nullptr;
     encoderFallbackSmokeMode_ = std::wcsstr(GetCommandLineW(), L"--encoder-fallback-smoke") != nullptr;
+    avMuxSmokeMode_ = std::wcsstr(GetCommandLineW(), L"--av-mux-smoke") != nullptr;
+    encoderFallbackSmokeMode_ = encoderFallbackSmokeMode_ || avMuxSmokeMode_;
     screenshotSmokeMode_ = std::wcsstr(GetCommandLineW(), L"--screenshot-smoke") != nullptr;
     nvencSmokeMode_ = nvencSmokeMode_ || recordSmokeMode_;
     if (recordSmokeMode_) recordSmokePath_ = ReadEnvironmentUtf8(L"OPENCAPTURE_RECORD_SMOKE");
@@ -324,7 +335,8 @@ bool Win32D3D11App::ProcessScreenshotFrame(const CapturedFrame& frame) {
     return success;
 }
 
-bool Win32D3D11App::StartRecording(int framesPerSecond, int quality, std::string requestedEncoder) {
+bool Win32D3D11App::StartRecording(int framesPerSecond, int quality, std::string requestedEncoder,
+                                   bool systemAudio, bool microphone) {
     if (recordingState_.Phase() == SessionPhase::Failed) recordingState_.Reset();
     if (!recordingState_.BeginStart()) return false;
     const auto candidates = encoderRegistry_.H264Candidates(requestedEncoder);
@@ -352,6 +364,27 @@ bool Win32D3D11App::StartRecording(int framesPerSecond, int quality, std::string
     processedFrame_.reset();
     muxer_.Close();
     videoEncoder_.Close();
+    audioEncoder_.Close();
+    systemAudioCapture_.Stop();
+    microphoneCapture_.Stop();
+    systemAudioEnabled_ = systemAudio && systemAudioCapture_.Start(AudioEndpointKind::SystemLoopback);
+    microphoneEnabled_ = microphone && microphoneCapture_.Start(AudioEndpointKind::Microphone);
+    audioStatus_.clear();
+    if (systemAudio && !systemAudioEnabled_) {
+        audioStatus_ = "System audio unavailable: " + systemAudioCapture_.LastError();
+    }
+    if (microphone && !microphoneEnabled_) {
+        if (!audioStatus_.empty()) audioStatus_ += " | ";
+        audioStatus_ += "Microphone unavailable: " + microphoneCapture_.LastError();
+    }
+    if (systemAudioEnabled_ || microphoneEnabled_) {
+        if (!audioStatus_.empty()) audioStatus_ += " | ";
+        audioStatus_ += systemAudioEnabled_ && microphoneEnabled_
+                            ? "System audio + microphone ready"
+                            : (systemAudioEnabled_ ? "System audio ready" : "Microphone ready");
+    } else if (!systemAudio && !microphone) {
+        audioStatus_ = "Audio disabled";
+    }
     capture_.Stop();
     if (!capture_.Start(targetPicker_.Selected(), device_.Get())) {
         FailRecording(capture_.LastError().empty() ? "Could not start Windows Graphics Capture." : capture_.LastError());
@@ -365,7 +398,10 @@ bool Win32D3D11App::StartRecording(int framesPerSecond, int quality, std::string
 
 void Win32D3D11App::FailRecording(std::string error) {
     capture_.Stop();
+    systemAudioCapture_.Stop();
+    microphoneCapture_.Stop();
     videoEncoder_.Close();
+    audioEncoder_.Close();
     muxer_.Close();
     frameProcessingError_ = error;
     recordingState_.Fail(std::move(error));
@@ -375,8 +411,15 @@ void Win32D3D11App::StopRecording() {
     if (!RecordingActive()) return;
     recordingState_.BeginStop();
     capture_.Stop();
+    systemAudioCapture_.Stop();
+    microphoneCapture_.Stop();
+    PumpRecordingAudio(true);
     if (videoEncoder_.IsOpen() && !videoEncoder_.Flush()) {
         FailRecording(videoEncoder_.LastError());
+        return;
+    }
+    if (audioEncoder_.IsOpen() && !audioEncoder_.Flush()) {
+        FailRecording(audioEncoder_.LastError());
         return;
     }
     if (muxer_.IsOpen() && !muxer_.Finalize()) {
@@ -412,12 +455,18 @@ bool Win32D3D11App::ProcessRecordingFrame(CapturedFrame frame) {
             FailRecording("No H.264 encoder accepted the D3D11 frame path. " + failures.str());
             return false;
         }
-        if (!muxer_.Open(recordingPath_, videoEncoder_.CodecContext())) {
+        if ((systemAudioEnabled_ || microphoneEnabled_) && !audioEncoder_.Open()) {
+            FailRecording(audioEncoder_.LastError());
+            return false;
+        }
+        if (!muxer_.Open(recordingPath_, videoEncoder_.CodecContext(), audioEncoder_.CodecContext())) {
             FailRecording(muxer_.LastError());
             return false;
         }
         videoEncoder_.SetPacketCallback([this](AVPacket* packet) { return muxer_.WriteVideoPacket(packet); });
+        audioEncoder_.SetPacketCallback([this](AVPacket* packet) { return muxer_.WriteAudioPacket(packet); });
         recordingStartQpc_ = frame.qpcTimestamp;
+        audioMixer_.Reset(QpcTo100ns(recordingStartQpc_, recordingQpcFrequency_));
         recordingState_.MarkRecording();
     }
     const auto delta = std::max<std::int64_t>(0, frame.qpcTimestamp - recordingStartQpc_);
@@ -456,6 +505,41 @@ void Win32D3D11App::PumpRecordingClock() {
         ++emitted;
     }
     recordingElapsedSeconds_ = static_cast<double>(delta) / static_cast<double>(recordingQpcFrequency_);
+}
+
+void Win32D3D11App::PumpRecordingAudio(bool finalDrain) {
+    if (!audioEncoder_.IsOpen() || recordingStartQpc_ <= 0) return;
+    if (systemAudioEnabled_) {
+        while (auto packet = systemAudioCapture_.TryPopPacket()) {
+            if (!audioMixer_.Push(AudioSource::System, *packet, systemAudioCapture_.Format())) {
+                FailRecording(audioMixer_.LastError());
+                return;
+            }
+        }
+    }
+    if (microphoneEnabled_) {
+        while (auto packet = microphoneCapture_.TryPopPacket()) {
+            if (!audioMixer_.Push(AudioSource::Microphone, *packet, microphoneCapture_.Format())) {
+                FailRecording(audioMixer_.LastError());
+                return;
+            }
+        }
+    }
+    LARGE_INTEGER now{};
+    QueryPerformanceCounter(&now);
+    const auto start100ns = QpcTo100ns(recordingStartQpc_, recordingQpcFrequency_);
+    const auto now100ns = QpcTo100ns(now.QuadPart, recordingQpcFrequency_);
+    auto availableThrough = static_cast<std::int64_t>(
+        (now100ns > start100ns ? now100ns - start100ns : 0) * AudioTimelineMixer::SampleRate / 10'000'000ULL);
+    if (!finalDrain) availableThrough = std::max<std::int64_t>(0, availableThrough - 2'400);
+    MixedAudioChunk chunk;
+    const auto frameSize = static_cast<std::uint32_t>(audioEncoder_.FrameSize());
+    while (audioMixer_.Pop(availableThrough, frameSize, chunk)) {
+        if (!audioEncoder_.Send(chunk.stereoSamples, chunk.presentationTimestamp)) {
+            FailRecording(audioEncoder_.LastError());
+            return;
+        }
+    }
 }
 
 bool Win32D3D11App::RunNvencSmoke(const ProcessedFrame& frame) {
@@ -536,12 +620,19 @@ bool Win32D3D11App::RunEncoderFallbackSmoke() {
         frameProcessingError_ = videoEncoder_.LastError();
         return false;
     }
-    if (!muxer_.Open(outputPath, videoEncoder_.CodecContext())) {
-        frameProcessingError_ = muxer_.LastError();
+    if (avMuxSmokeMode_ && !audioEncoder_.Open()) {
+        frameProcessingError_ = audioEncoder_.LastError();
         videoEncoder_.Close();
         return false;
     }
+    if (!muxer_.Open(outputPath, videoEncoder_.CodecContext(), audioEncoder_.CodecContext())) {
+        frameProcessingError_ = muxer_.LastError();
+        videoEncoder_.Close();
+        audioEncoder_.Close();
+        return false;
+    }
     videoEncoder_.SetPacketCallback([this](AVPacket* packet) { return muxer_.WriteVideoPacket(packet); });
+    audioEncoder_.SetPacketCallback([this](AVPacket* packet) { return muxer_.WriteAudioPacket(packet); });
     for (std::int64_t pts = 0; pts < 60; ++pts) {
         if (!videoEncoder_.Send(frame, pts)) {
             frameProcessingError_ = videoEncoder_.LastError();
@@ -550,14 +641,30 @@ bool Win32D3D11App::RunEncoderFallbackSmoke() {
             return false;
         }
     }
-    if (!videoEncoder_.Flush() || !muxer_.Finalize()) {
+    if (avMuxSmokeMode_) {
+        const int audioFrameSize = audioEncoder_.FrameSize();
+        std::vector<float> silence(static_cast<std::size_t>(audioFrameSize) * 2);
+        for (std::int64_t audioFrame = 0; audioFrame < 47; ++audioFrame) {
+            if (!audioEncoder_.Send(silence, audioFrame * audioFrameSize)) {
+                frameProcessingError_ = audioEncoder_.LastError();
+                muxer_.Close();
+                videoEncoder_.Close();
+                audioEncoder_.Close();
+                return false;
+            }
+        }
+    }
+    if (!videoEncoder_.Flush() || (audioEncoder_.IsOpen() && !audioEncoder_.Flush()) || !muxer_.Finalize()) {
         frameProcessingError_ = videoEncoder_.LastError().empty() ? muxer_.LastError() : videoEncoder_.LastError();
+        if (frameProcessingError_.empty()) frameProcessingError_ = audioEncoder_.LastError();
         muxer_.Close();
         videoEncoder_.Close();
+        audioEncoder_.Close();
         return false;
     }
     muxer_.Close();
     videoEncoder_.Close();
+    audioEncoder_.Close();
     return true;
 }
 
@@ -704,6 +811,7 @@ void Win32D3D11App::ProcessCaptureFrames() {
 void Win32D3D11App::Render() {
     ProcessCaptureFrames();
     PumpRecordingClock();
+    PumpRecordingAudio();
     ImGui_ImplDX11_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
@@ -720,9 +828,12 @@ void Win32D3D11App::Render() {
         }
     }
     const auto command = MainPanel::Draw(gpuName_, ffmpegVersion_, encoderSummary_, encoderChoices, frameProcessingError_,
-                                         screenshotStatus_,
+                                         screenshotStatus_, audioStatus_,
                                          recordingUi, targetPicker_, capture_, window_, device_.Get());
-    if (command.startRecording) StartRecording(command.framesPerSecond, command.quality, command.encoderName);
+    if (command.startRecording) {
+        StartRecording(command.framesPerSecond, command.quality, command.encoderName,
+                       command.systemAudio, command.microphone);
+    }
     if (command.stopRecording) StopRecording();
     if (command.copyScreenshot) StartScreenshot(ScreenshotDestination::Clipboard);
     if (command.saveScreenshot) StartScreenshot(ScreenshotDestination::File);
@@ -764,6 +875,9 @@ void Win32D3D11App::Shutdown() {
     capture_.Stop();
     muxer_.Close();
     videoEncoder_.Close();
+    audioEncoder_.Close();
+    systemAudioCapture_.Stop();
+    microphoneCapture_.Stop();
     processedFrame_.reset();
     frameProcessor_.Reset();
     if (initialized_) {

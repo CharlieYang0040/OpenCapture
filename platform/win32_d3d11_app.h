@@ -6,6 +6,9 @@
 
 #include "gpu/d3d11_frame_processor.h"
 #include "image/screenshot_service.h"
+#include "audio/audio_timeline_mixer.h"
+#include "audio/wasapi_capture.h"
+#include "encoder/ffmpeg_audio_encoder.h"
 #include "encoder/ffmpeg_d3d11_encoder.h"
 #include "encoder/ffmpeg_encoder_registry.h"
 #include "encoder/ffmpeg_muxer.h"
@@ -41,7 +44,9 @@ private:
     bool ProcessScreenshotFrame(const CapturedFrame& frame);
     bool SendRecordingFrame(const ProcessedFrame& frame, std::int64_t presentationTimestamp);
     void PumpRecordingClock();
-    bool StartRecording(int framesPerSecond, int quality, std::string requestedEncoder = {});
+    void PumpRecordingAudio(bool finalDrain = false);
+    bool StartRecording(int framesPerSecond, int quality, std::string requestedEncoder = {},
+                        bool systemAudio = true, bool microphone = false);
     void StopRecording();
     void FailRecording(std::string error);
     [[nodiscard]] bool RecordingActive() const noexcept;
@@ -69,12 +74,19 @@ private:
     std::string encoderSummary_;
     std::string frameProcessingError_;
     std::string screenshotStatus_;
+    std::string audioStatus_;
     std::optional<ScreenshotDestination> pendingScreenshot_;
     bool screenshotOwnsCapture_{};
     std::uint32_t adapterVendorId_{};
     FFmpegEncoderRegistry encoderRegistry_;
     FFmpegD3D11Encoder videoEncoder_;
+    FFmpegAudioEncoder audioEncoder_;
     FFmpegMuxer muxer_;
+    WasapiCapture systemAudioCapture_;
+    WasapiCapture microphoneCapture_;
+    AudioTimelineMixer audioMixer_;
+    bool systemAudioEnabled_{};
+    bool microphoneEnabled_{};
     std::uint64_t encodedPacketCount_{};
     std::string recordSmokePath_;
     SessionState recordingState_;
@@ -97,6 +109,7 @@ private:
     bool recordSmokeMode_{};
     bool realtimeRecordSmokeMode_{};
     bool encoderFallbackSmokeMode_{};
+    bool avMuxSmokeMode_{};
     bool screenshotSmokeMode_{};
     bool realtimeRecordSmokeComplete_{};
     bool captureSmokeFailed_{};

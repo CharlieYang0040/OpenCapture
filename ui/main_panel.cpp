@@ -89,6 +89,7 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
                                  const std::vector<EncoderUiChoice>& encoderChoices,
                                  std::string_view frameProcessingError,
                                  std::string_view screenshotStatus,
+                                 std::string_view audioStatus,
                                  const RecordingUiState& recording,
                                  CaptureTargetPicker& picker, WindowsGraphicsCapture& capture,
                                  HWND owner, ID3D11Device* device) {
@@ -284,6 +285,11 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     ImGui::Checkbox("Microphone", &microphone);
     ImGui::SameLine();
     ImGui::Checkbox("Cursor", &cursor);
+    command.systemAudio = systemAudio;
+    command.microphone = microphone;
+    if (!audioStatus.empty()) {
+        ImGui::TextWrapped("Audio: %.*s", static_cast<int>(audioStatus.size()), audioStatus.data());
+    }
 
     ImGui::Spacing();
     if (recording.active) {

@@ -38,6 +38,8 @@ struct MainPanelCommand {
     bool saveAndCopyScreenshot{};
     int framesPerSecond{60};
     int quality{1};
+    bool systemAudio{true};
+    bool microphone{};
     std::string encoderName;
 };
 
@@ -48,6 +50,7 @@ public:
                                  const std::vector<EncoderUiChoice>& encoderChoices,
                                  std::string_view frameProcessingError,
                                  std::string_view screenshotStatus,
+                                 std::string_view audioStatus,
                                  const RecordingUiState& recording,
                                  CaptureTargetPicker& picker, WindowsGraphicsCapture& capture,
                                  HWND owner, ID3D11Device* device);

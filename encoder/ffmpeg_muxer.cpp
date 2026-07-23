@@ -13,7 +13,8 @@ namespace opencapture {
 
 FFmpegMuxer::~FFmpegMuxer() { Close(); }
 
-bool FFmpegMuxer::Open(const std::string& path, const AVCodecContext* videoEncoder) {
+bool FFmpegMuxer::Open(const std::string& path, const AVCodecContext* videoEncoder,
+                       const AVCodecContext* audioEncoder) {
     Close();
     if (path.empty() || !videoEncoder || !videoEncoder->codec) {
         lastError_ = "A path and an open FFmpeg video encoder are required.";
@@ -41,8 +42,26 @@ bool FFmpegMuxer::Open(const std::string& path, const AVCodecContext* videoEncod
     videoStream_->codecpar->format = AV_PIX_FMT_NV12;
     videoStream_->time_base = videoEncoder->time_base;
     videoStream_->avg_frame_rate = videoEncoder->framerate;
-    encoderTimeBaseNumerator_ = videoEncoder->time_base.num;
-    encoderTimeBaseDenominator_ = videoEncoder->time_base.den;
+    videoTimeBaseNumerator_ = videoEncoder->time_base.num;
+    videoTimeBaseDenominator_ = videoEncoder->time_base.den;
+    if (audioEncoder) {
+        audioStream_ = avformat_new_stream(formatContext_, nullptr);
+        if (!audioStream_) {
+            lastError_ = "Could not create the output audio stream.";
+            Close();
+            return false;
+        }
+        result = avcodec_parameters_from_context(audioStream_->codecpar, audioEncoder);
+        if (result < 0) {
+            SetError("Could not copy AAC parameters to the output stream", result);
+            Close();
+            return false;
+        }
+        audioStream_->codecpar->codec_tag = 0;
+        audioStream_->time_base = audioEncoder->time_base;
+        audioTimeBaseNumerator_ = audioEncoder->time_base.num;
+        audioTimeBaseDenominator_ = audioEncoder->time_base.den;
+    }
 
     if ((formatContext_->oformat->flags & AVFMT_NOFILE) == 0) {
         result = avio_open(&formatContext_->pb, path.c_str(), AVIO_FLAG_WRITE);
@@ -69,13 +88,30 @@ bool FFmpegMuxer::WriteVideoPacket(AVPacket* packet) {
         lastError_ = "The output container is not ready for video packets.";
         return false;
     }
-    const AVRational encoderTimeBase{encoderTimeBaseNumerator_, encoderTimeBaseDenominator_};
+    const AVRational encoderTimeBase{videoTimeBaseNumerator_, videoTimeBaseDenominator_};
     av_packet_rescale_ts(packet, encoderTimeBase, videoStream_->time_base);
     packet->stream_index = videoStream_->index;
     packet->pos = -1;
     const int result = av_interleaved_write_frame(formatContext_, packet);
     if (result < 0) {
         SetError("Could not write an encoded video packet", result);
+        return false;
+    }
+    return true;
+}
+
+bool FFmpegMuxer::WriteAudioPacket(AVPacket* packet) {
+    if (!formatContext_ || !audioStream_ || !packet || !headerWritten_ || finalized_) {
+        lastError_ = "The output container is not ready for audio packets.";
+        return false;
+    }
+    const AVRational encoderTimeBase{audioTimeBaseNumerator_, audioTimeBaseDenominator_};
+    av_packet_rescale_ts(packet, encoderTimeBase, audioStream_->time_base);
+    packet->stream_index = audioStream_->index;
+    packet->pos = -1;
+    const int result = av_interleaved_write_frame(formatContext_, packet);
+    if (result < 0) {
+        SetError("Could not write an AAC packet", result);
         return false;
     }
     return true;
@@ -102,8 +138,11 @@ void FFmpegMuxer::Close() noexcept {
     }
     formatContext_ = nullptr;
     videoStream_ = nullptr;
-    encoderTimeBaseNumerator_ = 0;
-    encoderTimeBaseDenominator_ = 0;
+    audioStream_ = nullptr;
+    videoTimeBaseNumerator_ = 0;
+    videoTimeBaseDenominator_ = 0;
+    audioTimeBaseNumerator_ = 0;
+    audioTimeBaseDenominator_ = 0;
     headerWritten_ = false;
     finalized_ = false;
 }

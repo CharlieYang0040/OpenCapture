@@ -17,8 +17,10 @@ public:
     FFmpegMuxer(const FFmpegMuxer&) = delete;
     FFmpegMuxer& operator=(const FFmpegMuxer&) = delete;
 
-    bool Open(const std::string& path, const AVCodecContext* videoEncoder);
+    bool Open(const std::string& path, const AVCodecContext* videoEncoder,
+              const AVCodecContext* audioEncoder = nullptr);
     bool WriteVideoPacket(AVPacket* packet);
+    bool WriteAudioPacket(AVPacket* packet);
     bool Finalize();
     void Close() noexcept;
 
@@ -30,8 +32,11 @@ private:
 
     AVFormatContext* formatContext_{};
     AVStream* videoStream_{};
-    int encoderTimeBaseNumerator_{};
-    int encoderTimeBaseDenominator_{};
+    AVStream* audioStream_{};
+    int videoTimeBaseNumerator_{};
+    int videoTimeBaseDenominator_{};
+    int audioTimeBaseNumerator_{};
+    int audioTimeBaseDenominator_{};
     bool headerWritten_{};
     bool finalized_{};
     std::string lastError_;

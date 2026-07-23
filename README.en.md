@@ -34,12 +34,13 @@ Implemented:
 - PNG output, clipboard-only capture, and combined save-and-copy
 - Diskless Windows clipboard transfer through `CF_DIBV5`
 - Event-driven WASAPI loopback/microphone capture foundation and probe
+- 48 kHz stereo mixing, AAC encoding, and synchronized MKV A/V muxing
 - Bounded queue with a drop-oldest overload policy
 - Core unit tests and Windows GitHub Actions CI
 
 Not implemented yet:
 
-- Audio conversion, mixing, encoding, and synchronized muxing
+- Audio device selection, per-source volume/mute, Opus, and long-run drift correction
 - GIF recording and MP4 remux
 - Temporary output, recovery, pause, and free-space checks
 - Desktop Duplication, global hotkeys, and tray integration
@@ -155,7 +156,7 @@ OpenCapture/
 └─ .github/    GitHub Actions CI
 ```
 
-The next audio milestone will connect 48 kHz conversion, mixing, AAC/Opus, and synchronized muxing to the existing WASAPI capture foundation. UI code should remain limited to presentation and command dispatch, while capture, image, and encoding logic stays independently testable.
+The next audio milestone will add device selection, per-source volume/mute, Opus, and long-run drift correction. UI code should remain limited to presentation and command dispatch, while capture, image, and encoding logic stays independently testable.
 
 ## Troubleshooting
 

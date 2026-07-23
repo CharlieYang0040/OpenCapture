@@ -28,6 +28,7 @@ if(MSVC)
 endif()
 
 add_library(opencapture_audio STATIC
+    audio/audio_timeline_mixer.cpp
     audio/wasapi_capture.cpp
 )
 target_include_directories(opencapture_audio PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -47,6 +48,7 @@ if(OPENCAPTURE_BUILD_APP)
 
     add_executable(OpenCapture WIN32
         app/main.cpp
+        encoder/ffmpeg_audio_encoder.cpp
         encoder/ffmpeg_d3d11_encoder.cpp
         encoder/ffmpeg_encoder_registry.cpp
         encoder/ffmpeg_muxer.cpp
@@ -112,4 +114,11 @@ if(OPENCAPTURE_BUILD_TESTS)
         target_compile_options(opencapture_core_tests PRIVATE /W4 /permissive- /Zc:__cplusplus)
     endif()
     add_test(NAME opencapture_core_tests COMMAND opencapture_core_tests)
+
+    add_executable(opencapture_audio_tests tests/audio_tests.cpp)
+    target_link_libraries(opencapture_audio_tests PRIVATE opencapture_audio)
+    if(MSVC)
+        target_compile_options(opencapture_audio_tests PRIVATE /W4 /permissive- /Zc:__cplusplus)
+    endif()
+    add_test(NAME opencapture_audio_tests COMMAND opencapture_audio_tests)
 endif()
