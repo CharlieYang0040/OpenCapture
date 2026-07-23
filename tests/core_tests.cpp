@@ -57,6 +57,10 @@ void TestQpcTimestampConversion() {
           "half a QPC second becomes thirty frame ticks");
     Check(opencapture::QpcDeltaToFramePts(-1, 10'000'000, 60) == 0,
           "negative QPC deltas clamp to zero");
+    Check(opencapture::ActiveQpcDelta(30'000'000, 10'000'000) == 20'000'000,
+          "paused QPC duration is removed from the active timeline");
+    Check(opencapture::ActiveQpcDelta(5, 10) == 0,
+          "paused QPC duration cannot make the active timeline negative");
 }
 
 void TestCaptureTarget() {

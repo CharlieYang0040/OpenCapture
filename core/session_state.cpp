@@ -1,5 +1,6 @@
 #include "core/session_state.h"
 
+#include <algorithm>
 #include <utility>
 
 namespace opencapture {
@@ -8,6 +9,10 @@ std::int64_t QpcDeltaToFramePts(std::int64_t qpcDelta, std::int64_t qpcFrequency
                                 int framesPerSecond) noexcept {
     if (qpcDelta <= 0 || qpcFrequency <= 0 || framesPerSecond <= 0) return 0;
     return (qpcDelta * framesPerSecond + qpcFrequency / 2) / qpcFrequency;
+}
+
+std::int64_t ActiveQpcDelta(std::int64_t totalDelta, std::int64_t pausedDuration) noexcept {
+    return std::max<std::int64_t>(0, totalDelta - std::max<std::int64_t>(0, pausedDuration));
 }
 
 SessionPhase SessionState::Phase() const noexcept {

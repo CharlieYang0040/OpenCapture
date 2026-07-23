@@ -9,6 +9,8 @@ namespace opencapture {
 [[nodiscard]] std::int64_t QpcDeltaToFramePts(std::int64_t qpcDelta,
                                                std::int64_t qpcFrequency,
                                                int framesPerSecond) noexcept;
+[[nodiscard]] std::int64_t ActiveQpcDelta(std::int64_t totalDelta,
+                                          std::int64_t pausedDuration) noexcept;
 
 enum class SessionPhase {
     Idle,

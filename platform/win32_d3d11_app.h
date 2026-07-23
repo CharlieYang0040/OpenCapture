@@ -48,7 +48,9 @@ private:
     void PumpRecordingClock();
     void PumpRecordingAudio(bool finalDrain = false);
     bool StartRecording(int framesPerSecond, int quality, std::string requestedEncoder = {},
-                        bool systemAudio = true, bool microphone = false);
+                        bool systemAudio = true, bool microphone = false, bool remuxToMp4 = false);
+    bool PauseRecording();
+    bool ResumeRecording();
     void StopRecording();
     void FailRecording(std::string error);
     [[nodiscard]] bool RecordingActive() const noexcept;
@@ -61,6 +63,8 @@ private:
     bool SaveOutputDirectory() const;
     void ScanRecoverableRecordings();
     bool RecoverRecording(std::size_t index);
+    bool RemuxRecordingToMp4(std::string_view sourcePath);
+    [[nodiscard]] std::int64_t EffectiveRecordingDelta(std::int64_t qpc) const noexcept;
     [[nodiscard]] std::wstring MakeScreenshotPath() const;
     bool StartScreenshot(ScreenshotDestination destination);
     bool RunNvencSmoke(const ProcessedFrame& frame);
@@ -86,6 +90,7 @@ private:
     std::string screenshotStatus_;
     std::string audioStatus_;
     std::string recoveryStatus_;
+    std::string remuxStatus_;
     std::vector<RecoverableRecordingUiItem> recoverableRecordings_;
     std::wstring outputDirectory_;
     std::string outputDirectoryUtf8_;
@@ -101,6 +106,7 @@ private:
     AudioTimelineMixer audioMixer_;
     bool systemAudioEnabled_{};
     bool microphoneEnabled_{};
+    bool recordingRemuxToMp4_{};
     std::uint64_t encodedPacketCount_{};
     std::string recordSmokePath_;
     SessionState recordingState_;
@@ -112,6 +118,8 @@ private:
     std::int64_t recordingBitRate_{10'000'000};
     std::int64_t recordingQpcFrequency_{};
     std::int64_t recordingStartQpc_{};
+    std::int64_t recordingPausedQpc_{};
+    std::int64_t recordingPauseStartQpc_{};
     std::int64_t recordingLastPts_{-1};
     std::uint64_t recordingFrameCount_{};
     double recordingElapsedSeconds_{};
@@ -123,12 +131,18 @@ private:
     bool nvencSmokeMode_{};
     bool recordSmokeMode_{};
     bool realtimeRecordSmokeMode_{};
+    bool pauseRecordSmokeMode_{};
+    bool mp4RecordSmokeMode_{};
     bool recordFailureSmokeMode_{};
     bool encoderFallbackSmokeMode_{};
     bool avMuxSmokeMode_{};
     bool screenshotSmokeMode_{};
     bool recoverySmokeMode_{};
+    bool remuxSmokeMode_{};
     bool realtimeRecordSmokeComplete_{};
+    bool pauseSmokeStarted_{};
+    bool pauseSmokeResumed_{};
+    std::int64_t pauseSmokeWallStartQpc_{};
     bool captureSmokeFailed_{};
     bool initialized_{};
 };

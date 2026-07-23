@@ -91,6 +91,7 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
                                  std::string_view screenshotStatus,
                                  std::string_view audioStatus,
                                  std::string_view recoveryStatus,
+                                 std::string_view remuxStatus,
                                  std::string_view outputDirectory,
                                  const std::vector<RecoverableRecordingUiItem>& recoverableRecordings,
                                  const RecordingUiState& recording,
@@ -272,13 +273,14 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     static int format = 0;
     static int fps = 60;
     static int quality = 1;
-    constexpr std::array formats{"MKV / H.264", "MP4 / H.264", "MKV / HEVC"};
+    constexpr std::array formats{"MKV / H.264", "MP4 copy / H.264"};
     constexpr std::array qualities{"Performance", "Balanced", "Quality"};
     ImGui::Combo("Format", &format, formats.data(), static_cast<int>(formats.size()));
     ImGui::SliderInt("FPS", &fps, 15, 120);
     ImGui::Combo("Quality", &quality, qualities.data(), static_cast<int>(qualities.size()));
     command.framesPerSecond = fps;
     command.quality = quality;
+    command.remuxToMp4 = format == 1;
 
     static bool systemAudio = true;
     static bool microphone = false;
@@ -367,17 +369,27 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     ImGui::SeparatorText("Video");
     ImGui::TextUnformatted("Record the selected target with the FPS, quality, and audio options above.");
     if (recording.active) {
+        if (recording.paused) {
+            if (ImGui::Button("Resume video recording", ImVec2(205.0F, 44.0F))) {
+                command.resumeRecording = true;
+            }
+        } else if (ImGui::Button("Pause video recording", ImVec2(205.0F, 44.0F))) {
+            command.pauseRecording = true;
+        }
+        ImGui::SameLine();
         if (ImGui::Button("Stop video recording", ImVec2(205.0F, 44.0F))) command.stopRecording = true;
     } else if (ImGui::Button("Start video recording", ImVec2(205.0F, 44.0F))) {
         command.startRecording = true;
         if (selectedEncoder > 0) command.encoderName = encoderChoices[static_cast<std::size_t>(selectedEncoder - 1)].name;
     }
-    ImGui::SameLine();
-    ImGui::BeginDisabled();
-    ImGui::Button("Record GIF (coming soon)", ImVec2(205.0F, 44.0F));
-    ImGui::EndDisabled();
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-        ImGui::SetTooltip("GIF recording is planned but not implemented yet.");
+    if (!recording.active) {
+        ImGui::SameLine();
+        ImGui::BeginDisabled();
+        ImGui::Button("Record GIF (coming soon)", ImVec2(205.0F, 44.0F));
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            ImGui::SetTooltip("GIF recording is planned but not implemented yet.");
+        }
     }
     if (recording.active || !recording.outputPath.empty()) {
         ImGui::Text("Recorded: %llu frames | %.2f s",
@@ -386,6 +398,17 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
         if (!recording.encoderName.empty()) {
             ImGui::Text("Active encoder: %.*s", static_cast<int>(recording.encoderName.size()), recording.encoderName.data());
         }
+    }
+    if (!recording.active && recording.canRemux) {
+        if (ImGui::Button("Create MP4 copy", ImVec2(180.0F, 34.0F))) {
+            command.remuxLastRecording = true;
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Remux the last MKV without re-encoding. The source MKV is kept.");
+        }
+    }
+    if (!remuxStatus.empty()) {
+        ImGui::TextWrapped("%.*s", static_cast<int>(remuxStatus.size()), remuxStatus.data());
     }
     if (!recording.error.empty()) {
         ImGui::TextColored(ImVec4(1.0F, 0.4F, 0.35F, 1.0F), "%.*s",

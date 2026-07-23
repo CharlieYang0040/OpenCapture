@@ -4,7 +4,7 @@
 
 OpenCapture is a native screen capture application for Windows 10 and 11. Its goal is a GPU-first recording path that keeps captured frames as D3D11 textures through processing and hardware encoding, avoiding a full-frame CPU memory round trip for every frame.
 
-The project is an actively developed technical prototype. It can capture a window, monitor, or region with Windows Graphics Capture, crop and scale on D3D11, and produce H.264/AAC MKV recordings or PNG/clipboard still captures. GIF and MP4 remux are still under development.
+The project is an actively developed technical prototype. It can capture a window, monitor, or region with Windows Graphics Capture, crop and scale on D3D11, and produce H.264/AAC MKV/MP4 recordings or PNG/clipboard still captures. GIF is still under development.
 
 ## Goals
 
@@ -38,6 +38,8 @@ Implemented:
 - Safe `.part.mkv` recording, 512 MiB free-space gate, and final-name commit
 - Incomplete-MKV discovery and output collision avoidance
 - UI recovery that validates incomplete MKV streams before choosing a collision-free final name
+- Recording pause/resume with paused time removed from the output timeline
+- H.264/AAC MP4 remux copies that preserve the safe MKV source
 - One configurable output folder shared by screenshots and recordings
 - Region confirmation that returns to the main app and restores its monitor after restart
 - Result-oriented screenshot/video controls with the unavailable GIF action clearly disabled
@@ -47,8 +49,7 @@ Implemented:
 Not implemented yet:
 
 - Audio device selection, per-source volume/mute, Opus, and long-run drift correction
-- GIF recording and MP4 remux
-- Recording pause
+- GIF recording
 - Desktop Duplication, global hotkeys, and tray integration
 - QSV/AMF hardware validation and long-running performance tests
 

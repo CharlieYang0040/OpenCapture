@@ -16,6 +16,8 @@ class WindowsGraphicsCapture;
 struct RecordingUiState {
     bool active{};
     bool starting{};
+    bool paused{};
+    bool canRemux{};
     std::string_view outputPath;
     std::string_view error;
     std::string_view encoderName;
@@ -41,6 +43,10 @@ struct MainPanelCommand {
     int recoverRecordingIndex{-1};
     bool startRecording{};
     bool stopRecording{};
+    bool pauseRecording{};
+    bool resumeRecording{};
+    bool remuxLastRecording{};
+    bool remuxToMp4{};
     bool copyScreenshot{};
     bool saveScreenshot{};
     bool saveAndCopyScreenshot{};
@@ -60,6 +66,7 @@ public:
                                  std::string_view screenshotStatus,
                                  std::string_view audioStatus,
                                  std::string_view recoveryStatus,
+                                 std::string_view remuxStatus,
                                  std::string_view outputDirectory,
                                  const std::vector<RecoverableRecordingUiItem>& recoverableRecordings,
                                  const RecordingUiState& recording,
