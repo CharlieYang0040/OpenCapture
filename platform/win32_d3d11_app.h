@@ -5,6 +5,7 @@
 #include <wrl/client.h>
 
 #include "gpu/d3d11_frame_processor.h"
+#include "image/screenshot_service.h"
 #include "encoder/ffmpeg_d3d11_encoder.h"
 #include "encoder/ffmpeg_encoder_registry.h"
 #include "encoder/ffmpeg_muxer.h"
@@ -37,6 +38,7 @@ private:
     void HandleDeviceFailure(HRESULT result);
     void ProcessCaptureFrames();
     bool ProcessRecordingFrame(CapturedFrame frame);
+    bool ProcessScreenshotFrame(const CapturedFrame& frame);
     bool SendRecordingFrame(const ProcessedFrame& frame, std::int64_t presentationTimestamp);
     void PumpRecordingClock();
     bool StartRecording(int framesPerSecond, int quality, std::string requestedEncoder = {});
@@ -44,8 +46,11 @@ private:
     void FailRecording(std::string error);
     [[nodiscard]] bool RecordingActive() const noexcept;
     [[nodiscard]] std::string MakeRecordingPath() const;
+    [[nodiscard]] std::wstring MakeScreenshotPath() const;
+    bool StartScreenshot(ScreenshotDestination destination);
     bool RunNvencSmoke(const ProcessedFrame& frame);
     bool RunEncoderFallbackSmoke();
+    bool RunScreenshotSmoke();
     void Render();
     void Shutdown();
 
@@ -56,12 +61,16 @@ private:
     Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain_;
     Microsoft::WRL::ComPtr<ID3D11RenderTargetView> renderTarget_;
     D3D11FrameProcessor frameProcessor_;
+    ScreenshotService screenshotService_;
     std::optional<ProcessedFrame> processedFrame_;
     std::uint64_t processedFrameCount_{};
     std::string gpuName_;
     std::string ffmpegVersion_;
     std::string encoderSummary_;
     std::string frameProcessingError_;
+    std::string screenshotStatus_;
+    std::optional<ScreenshotDestination> pendingScreenshot_;
+    bool screenshotOwnsCapture_{};
     std::uint32_t adapterVendorId_{};
     FFmpegEncoderRegistry encoderRegistry_;
     FFmpegD3D11Encoder videoEncoder_;
@@ -88,6 +97,7 @@ private:
     bool recordSmokeMode_{};
     bool realtimeRecordSmokeMode_{};
     bool encoderFallbackSmokeMode_{};
+    bool screenshotSmokeMode_{};
     bool realtimeRecordSmokeComplete_{};
     bool captureSmokeFailed_{};
     bool initialized_{};

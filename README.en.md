@@ -4,7 +4,7 @@
 
 OpenCapture is a native screen capture application for Windows 10 and 11. Its goal is a GPU-first recording path that keeps captured frames as D3D11 textures through processing and hardware encoding, avoiding a full-frame CPU memory round trip for every frame.
 
-The project is an actively developed technical prototype. It can capture a window, monitor, or region with Windows Graphics Capture, crop, scale, and convert frames to NV12 on D3D11, and write H.264 MKV through NVENC or the OpenH264 fallback. Audio, screenshots, GIF, and safe-output workflows are still under development.
+The project is an actively developed technical prototype. It can capture a window, monitor, or region with Windows Graphics Capture, crop and scale on D3D11, and produce H.264 MKV recordings or PNG/clipboard still captures. Audio, GIF, and safe-output workflows are still under development.
 
 ## Goals
 
@@ -31,13 +31,14 @@ Implemented:
 - Real-time H.264 NVENC encoding and MKV output
 - Automatic/manual H.264 selection with an OpenH264 final fallback
 - Recording start/stop controls and active-encoder status
+- PNG output, clipboard-only capture, and combined save-and-copy
+- Diskless Windows clipboard transfer through `CF_DIBV5`
 - Bounded queue with a drop-oldest overload policy
 - Core unit tests and Windows GitHub Actions CI
 
 Not implemented yet:
 
 - Audio capture, mixing, and synchronization
-- Screenshot output and diskless clipboard capture
 - GIF recording and MP4 remux
 - Temporary output, recovery, pause, and free-space checks
 - Desktop Duplication, global hotkeys, and tray integration
@@ -143,6 +144,7 @@ OpenCapture/
 ├─ core/       Capture targets, session state, and bounded queues
 ├─ encoder/    FFmpeg discovery, D3D11 encoding, and muxing
 ├─ gpu/        D3D11 crop, scale, and color conversion
+├─ image/      WIC screenshot output and Windows clipboard transfer
 ├─ platform/   Win32, WGC, target selection, and DPI integration
 ├─ ui/         Dear ImGui presentation and command dispatch
 ├─ tests/      Automated core tests
@@ -151,7 +153,7 @@ OpenCapture/
 └─ .github/    GitHub Actions CI
 ```
 
-Future milestones will add the `audio` and `image` modules. UI code should remain limited to presentation and command dispatch, while capture and encoding logic stays independently testable.
+Future milestones will add the `audio` module. UI code should remain limited to presentation and command dispatch, while capture, image, and encoding logic stays independently testable.
 
 ## Troubleshooting
 

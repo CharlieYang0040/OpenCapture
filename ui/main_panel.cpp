@@ -88,6 +88,7 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
                                  std::string_view encoderSummary,
                                  const std::vector<EncoderUiChoice>& encoderChoices,
                                  std::string_view frameProcessingError,
+                                 std::string_view screenshotStatus,
                                  const RecordingUiState& recording,
                                  CaptureTargetPicker& picker, WindowsGraphicsCapture& capture,
                                  HWND owner, ID3D11Device* device) {
@@ -306,8 +307,15 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     }
 
     ImGui::Spacing();
-    ImGui::Button("Screenshot", ImVec2(130.0F, 40.0F));
+    if (ImGui::Button("Copy capture", ImVec2(120.0F, 40.0F))) command.copyScreenshot = true;
     ImGui::SameLine();
+    if (ImGui::Button("Save PNG", ImVec2(105.0F, 40.0F))) command.saveScreenshot = true;
+    ImGui::SameLine();
+    if (ImGui::Button("Save + copy", ImVec2(120.0F, 40.0F))) command.saveAndCopyScreenshot = true;
+    if (!screenshotStatus.empty()) {
+        ImGui::TextWrapped("%.*s", static_cast<int>(screenshotStatus.size()), screenshotStatus.data());
+    }
+    ImGui::Spacing();
     ImGui::Button("GIF", ImVec2(100.0F, 40.0F));
     ImGui::SameLine();
     if (recording.active) {

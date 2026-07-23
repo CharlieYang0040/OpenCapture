@@ -41,6 +41,7 @@ if(OPENCAPTURE_BUILD_APP)
         encoder/ffmpeg_encoder_registry.cpp
         encoder/ffmpeg_muxer.cpp
         gpu/d3d11_frame_processor.cpp
+        image/screenshot_service.cpp
         platform/capture_target_picker.cpp
         platform/windows_graphics_capture.cpp
         platform/win32_d3d11_app.cpp
@@ -58,6 +59,7 @@ if(OPENCAPTURE_BUILD_APP)
         dxgi
         dwmapi
         shell32
+        windowscodecs
         windowsapp
     )
     target_compile_definitions(OpenCapture PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)

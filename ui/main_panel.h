@@ -33,6 +33,9 @@ struct EncoderUiChoice {
 struct MainPanelCommand {
     bool startRecording{};
     bool stopRecording{};
+    bool copyScreenshot{};
+    bool saveScreenshot{};
+    bool saveAndCopyScreenshot{};
     int framesPerSecond{60};
     int quality{1};
     std::string encoderName;
@@ -44,6 +47,7 @@ public:
                                  std::string_view encoderSummary,
                                  const std::vector<EncoderUiChoice>& encoderChoices,
                                  std::string_view frameProcessingError,
+                                 std::string_view screenshotStatus,
                                  const RecordingUiState& recording,
                                  CaptureTargetPicker& picker, WindowsGraphicsCapture& capture,
                                  HWND owner, ID3D11Device* device);

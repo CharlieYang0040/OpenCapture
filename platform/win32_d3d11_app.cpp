@@ -20,6 +20,7 @@ extern "C" {
 #include <stdexcept>
 #include <winrt/base.h>
 #include <ShlObj.h>
+#include <wincodec.h>
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
 
@@ -51,6 +52,12 @@ std::string ReadEnvironmentUtf8(const wchar_t* name) {
     return length > 0 && length < value.size() ? ToUtf8(value.data()) : std::string{};
 }
 
+std::wstring ReadEnvironmentWide(const wchar_t* name) {
+    std::array<wchar_t, 32768> value{};
+    const DWORD length = GetEnvironmentVariableW(name, value.data(), static_cast<DWORD>(value.size()));
+    return length > 0 && length < value.size() ? std::wstring(value.data(), length) : std::wstring{};
+}
+
 } // namespace
 
 Win32D3D11App::~Win32D3D11App() { Shutdown(); }
@@ -65,6 +72,7 @@ bool Win32D3D11App::Initialize(HINSTANCE instance, int showCommand) {
     recordSmokeMode_ = std::wcsstr(GetCommandLineW(), L"--record-smoke") != nullptr;
     realtimeRecordSmokeMode_ = std::wcsstr(GetCommandLineW(), L"--realtime-record-smoke") != nullptr;
     encoderFallbackSmokeMode_ = std::wcsstr(GetCommandLineW(), L"--encoder-fallback-smoke") != nullptr;
+    screenshotSmokeMode_ = std::wcsstr(GetCommandLineW(), L"--screenshot-smoke") != nullptr;
     nvencSmokeMode_ = nvencSmokeMode_ || recordSmokeMode_;
     if (recordSmokeMode_) recordSmokePath_ = ReadEnvironmentUtf8(L"OPENCAPTURE_RECORD_SMOKE");
     gpuNv12SmokeMode_ = gpuNv12SmokeMode_ || nvencSmokeMode_;
@@ -98,7 +106,11 @@ bool Win32D3D11App::Initialize(HINSTANCE instance, int showCommand) {
     initialized_ = true;
     ShowWindow(window_, showCommand);
     UpdateWindow(window_);
-    if (encoderFallbackSmokeMode_) {
+    if (screenshotSmokeMode_) {
+        captureSmokeFailed_ = !RunScreenshotSmoke();
+        if (captureSmokeFailed_) WriteSmokeFailure(frameProcessingError_);
+        PostMessageW(window_, WM_CLOSE, 0, 0);
+    } else if (encoderFallbackSmokeMode_) {
         captureSmokeFailed_ = !RunEncoderFallbackSmoke();
         if (captureSmokeFailed_) WriteSmokeFailure(frameProcessingError_);
         PostMessageW(window_, WM_CLOSE, 0, 0);
@@ -239,6 +251,77 @@ std::string Win32D3D11App::MakeRecordingPath() const {
                time.wSecond, time.wMilliseconds);
     directory /= fileName;
     return ToUtf8(directory.c_str());
+}
+
+std::wstring Win32D3D11App::MakeScreenshotPath() const {
+    PWSTR picturesPath{};
+    if (FAILED(SHGetKnownFolderPath(FOLDERID_Pictures, KF_FLAG_CREATE, nullptr, &picturesPath))) return {};
+    std::filesystem::path directory(picturesPath);
+    CoTaskMemFree(picturesPath);
+    directory /= L"OpenCapture";
+    SYSTEMTIME time{};
+    GetLocalTime(&time);
+    wchar_t fileName[96]{};
+    swprintf_s(fileName, L"OpenCapture_%04u%02u%02u_%02u%02u%02u_%03u.png",
+               time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute,
+               time.wSecond, time.wMilliseconds);
+    directory /= fileName;
+    return directory.wstring();
+}
+
+bool Win32D3D11App::StartScreenshot(ScreenshotDestination destination) {
+    if (pendingScreenshot_) return false;
+    if (!targetPicker_.Selected().IsValid()) {
+        screenshotStatus_ = "Select a valid capture target first.";
+        return false;
+    }
+    pendingScreenshot_ = destination;
+    screenshotStatus_ = "Waiting for one capture frame...";
+    screenshotOwnsCapture_ = false;
+    if (!capture_.IsRunning()) {
+        if (!capture_.Start(targetPicker_.Selected(), device_.Get())) {
+            screenshotStatus_ = capture_.LastError().empty()
+                                    ? "Could not start capture for the screenshot."
+                                    : capture_.LastError();
+            pendingScreenshot_.reset();
+            return false;
+        }
+        screenshotOwnsCapture_ = true;
+    }
+    return true;
+}
+
+bool Win32D3D11App::ProcessScreenshotFrame(const CapturedFrame& frame) {
+    if (!pendingScreenshot_) return true;
+    FrameProcessOptions options{};
+    options.pixelFormat = FramePixelFormat::Bgra;
+    auto processed = frameProcessor_.Process(frame, capture_.ActiveTarget(), options);
+    if (!processed) {
+        screenshotStatus_ = frameProcessor_.LastError();
+        pendingScreenshot_.reset();
+        if (screenshotOwnsCapture_) capture_.Stop();
+        screenshotOwnsCapture_ = false;
+        return false;
+    }
+    const auto destination = *pendingScreenshot_;
+    const auto path = destination == ScreenshotDestination::Clipboard ? std::wstring{} : MakeScreenshotPath();
+    const bool success = screenshotService_.Capture(device_.Get(), context_.Get(), processed->texture.Get(),
+                                                    processed->contentSize, destination, path, window_);
+    if (success) {
+        if (destination == ScreenshotDestination::Clipboard) {
+            screenshotStatus_ = "Screenshot copied to the clipboard without creating a file.";
+        } else if (destination == ScreenshotDestination::File) {
+            screenshotStatus_ = "PNG saved: " + ToUtf8(path.c_str());
+        } else {
+            screenshotStatus_ = "PNG saved and copied: " + ToUtf8(path.c_str());
+        }
+    } else {
+        screenshotStatus_ = screenshotService_.LastError();
+    }
+    pendingScreenshot_.reset();
+    if (screenshotOwnsCapture_) capture_.Stop();
+    screenshotOwnsCapture_ = false;
+    return success;
 }
 
 bool Win32D3D11App::StartRecording(int framesPerSecond, int quality, std::string requestedEncoder) {
@@ -478,9 +561,97 @@ bool Win32D3D11App::RunEncoderFallbackSmoke() {
     return true;
 }
 
+bool Win32D3D11App::RunScreenshotSmoke() {
+    constexpr UINT width = 64;
+    constexpr UINT height = 32;
+    std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width) * height * 4);
+    for (UINT row = 0; row < height; ++row) {
+        for (UINT column = 0; column < width; ++column) {
+            const auto offset = (static_cast<std::size_t>(row) * width + column) * 4;
+            pixels[offset] = static_cast<std::uint8_t>(column * 4);
+            pixels[offset + 1] = static_cast<std::uint8_t>(row * 8);
+            pixels[offset + 2] = 0xC0;
+            pixels[offset + 3] = 0xFF;
+        }
+    }
+    D3D11_TEXTURE2D_DESC description{};
+    description.Width = width;
+    description.Height = height;
+    description.MipLevels = 1;
+    description.ArraySize = 1;
+    description.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    description.SampleDesc.Count = 1;
+    description.Usage = D3D11_USAGE_DEFAULT;
+    description.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    D3D11_SUBRESOURCE_DATA initialData{};
+    initialData.pSysMem = pixels.data();
+    initialData.SysMemPitch = width * 4;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+    if (FAILED(device_->CreateTexture2D(&description, &initialData, &texture))) {
+        frameProcessingError_ = "Could not create the synthetic screenshot texture.";
+        return false;
+    }
+    const auto outputPath = ReadEnvironmentWide(L"OPENCAPTURE_SCREENSHOT_OUTPUT");
+    if (outputPath.empty() ||
+        !screenshotService_.Capture(device_.Get(), context_.Get(), texture.Get(),
+                                    SIZE{static_cast<LONG>(width), static_cast<LONG>(height)},
+                                    ScreenshotDestination::FileAndClipboard, outputPath, window_)) {
+        frameProcessingError_ = outputPath.empty()
+                                    ? "OPENCAPTURE_SCREENSHOT_OUTPUT is required."
+                                    : screenshotService_.LastError();
+        return false;
+    }
+    if (!screenshotService_.Capture(device_.Get(), context_.Get(), texture.Get(),
+                                    SIZE{static_cast<LONG>(width), static_cast<LONG>(height)},
+                                    ScreenshotDestination::Clipboard, {}, window_)) {
+        frameProcessingError_ = screenshotService_.LastError();
+        return false;
+    }
+    Microsoft::WRL::ComPtr<IWICImagingFactory> imagingFactory;
+    Microsoft::WRL::ComPtr<IWICBitmapDecoder> decoder;
+    Microsoft::WRL::ComPtr<IWICBitmapFrameDecode> decodedFrame;
+    UINT decodedWidth{};
+    UINT decodedHeight{};
+    if (FAILED(CoCreateInstance(CLSID_WICImagingFactory2, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(&imagingFactory))) ||
+        FAILED(imagingFactory->CreateDecoderFromFilename(outputPath.c_str(), nullptr, GENERIC_READ,
+                                                         WICDecodeMetadataCacheOnLoad, &decoder)) ||
+        FAILED(decoder->GetFrame(0, &decodedFrame)) ||
+        FAILED(decodedFrame->GetSize(&decodedWidth, &decodedHeight)) ||
+        decodedWidth != width || decodedHeight != height) {
+        frameProcessingError_ = "WIC could not reopen the screenshot PNG at the expected dimensions.";
+        return false;
+    }
+    bool clipboardOpen{};
+    for (int attempt = 0; attempt < 10 && !clipboardOpen; ++attempt) {
+        clipboardOpen = OpenClipboard(window_) != FALSE;
+        if (!clipboardOpen) Sleep(10);
+    }
+    if (!clipboardOpen) {
+        frameProcessingError_ = "Could not reopen the clipboard for screenshot validation.";
+        return false;
+    }
+    const HANDLE clipboardData = GetClipboardData(CF_DIBV5);
+    const auto* header = clipboardData
+        ? static_cast<const BITMAPV5HEADER*>(GlobalLock(clipboardData))
+        : nullptr;
+    const bool valid = header && header->bV5Size == sizeof(BITMAPV5HEADER) &&
+                       header->bV5Width == static_cast<LONG>(width) &&
+                       header->bV5Height == -static_cast<LONG>(height) &&
+                       header->bV5BitCount == 32;
+    if (header) GlobalUnlock(clipboardData);
+    CloseClipboard();
+    if (!valid) {
+        frameProcessingError_ = "CF_DIBV5 clipboard validation failed.";
+        return false;
+    }
+    return true;
+}
+
 void Win32D3D11App::ProcessCaptureFrames() {
     if (RecordingActive()) {
         while (auto frame = capture_.TryPopFrame()) {
+            if (pendingScreenshot_) ProcessScreenshotFrame(*frame);
             if (!ProcessRecordingFrame(std::move(*frame))) break;
         }
         return;
@@ -488,6 +659,10 @@ void Win32D3D11App::ProcessCaptureFrames() {
     std::optional<CapturedFrame> latest;
     while (auto frame = capture_.TryPopFrame()) latest = std::move(frame);
     if (!latest) return;
+    if (pendingScreenshot_) {
+        ProcessScreenshotFrame(*latest);
+        if (!captureSmokeMode_ && !capture_.IsRunning()) return;
+    }
     FrameProcessOptions options{};
     if (gpuNv12SmokeMode_) {
         options.outputSize = SIZE{320, 180};
@@ -545,9 +720,13 @@ void Win32D3D11App::Render() {
         }
     }
     const auto command = MainPanel::Draw(gpuName_, ffmpegVersion_, encoderSummary_, encoderChoices, frameProcessingError_,
+                                         screenshotStatus_,
                                          recordingUi, targetPicker_, capture_, window_, device_.Get());
     if (command.startRecording) StartRecording(command.framesPerSecond, command.quality, command.encoderName);
     if (command.stopRecording) StopRecording();
+    if (command.copyScreenshot) StartScreenshot(ScreenshotDestination::Clipboard);
+    if (command.saveScreenshot) StartScreenshot(ScreenshotDestination::File);
+    if (command.saveAndCopyScreenshot) StartScreenshot(ScreenshotDestination::FileAndClipboard);
 
     if (captureSmokeMode_ &&
         ((!gpuCropSmokeMode_ && capture_.FrameCount() >= 1) ||
