@@ -4,7 +4,7 @@
 
 OpenCapture is a native screen capture application for Windows 10 and 11. Its goal is a GPU-first recording path that keeps captured frames as D3D11 textures through processing and hardware encoding, avoiding a full-frame CPU memory round trip for every frame.
 
-The project is an actively developed technical prototype. It can capture a window, monitor, or region with Windows Graphics Capture, crop and scale on D3D11, and produce H.264/AAC MKV/MP4 recordings or PNG/clipboard still captures. GIF is still under development.
+The project is an actively developed technical prototype. It can capture a window, monitor, or region with Windows Graphics Capture, crop and scale on D3D11, and produce H.264/AAC MKV/MP4 recordings, palette-optimized GIFs, or PNG/clipboard still captures.
 
 ## Goals
 
@@ -40,16 +40,20 @@ Implemented:
 - UI recovery that validates incomplete MKV streams before choosing a collision-free final name
 - Recording pause/resume with paused time removed from the output timeline
 - H.264/AAC MP4 remux copies that preserve the safe MKV source
+- GIF recording from the same targets and saved region presets
+- Selectable GIF output at 360p, 480p, 720p, or 1080p; 6-30 fps; and 64-256 colors
+- GPU-scaled low-FPS source recording and FFmpeg two-pass palettegen/paletteuse conversion
+- Automatic GIF stop at 30 seconds or a 500-million-pixel processing budget, with source MKV recovery on failure
 - One configurable output folder shared by screenshots and recordings
 - Region confirmation that returns to the main app and restores its monitor after restart
-- Result-oriented screenshot/video controls with the unavailable GIF action clearly disabled
+- Result-oriented screenshot, video, and GIF controls
 - Bounded queue with a drop-oldest overload policy
 - Core unit tests and Windows GitHub Actions CI
 
 Not implemented yet:
 
 - Audio device selection, per-source volume/mute, Opus, and long-run drift correction
-- GIF recording
+- GIF conversion progress/cancellation and general MP4/MKV/WebM offline conversion
 - Desktop Duplication, global hotkeys, and tray integration
 - QSV/AMF hardware validation and long-running performance tests
 

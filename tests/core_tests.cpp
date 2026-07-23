@@ -108,6 +108,17 @@ void TestOutputSizeNormalization() {
     Check(nv12.cx == 1920 && nv12.cy == 1080, "NV12 rounds dimensions down to even values");
     const SIZE scaled = opencapture::NormalizeOutputSize(SIZE{1281, 721}, source, true);
     Check(scaled.cx == 1280 && scaled.cy == 720, "scaled video dimensions are even");
+    const SIZE fitted = opencapture::FitOutputHeight(SIZE{1920, 1080}, 720, true);
+    Check(fitted.cx == 1280 && fitted.cy == 720, "GIF height limit preserves aspect ratio");
+    const SIZE portrait = opencapture::FitOutputHeight(SIZE{1080, 1920}, 480, true);
+    Check(portrait.cx == 270 && portrait.cy == 480, "portrait GIF scaling preserves aspect ratio");
+    const SIZE noUpscale = opencapture::FitOutputHeight(SIZE{640, 360}, 720, true);
+    Check(noUpscale.cx == 640 && noUpscale.cy == 360, "GIF scaling never enlarges a small source");
+    Check(opencapture::GifDurationLimit(SIZE{1280, 720}, 12) == 30.0,
+          "default 720p GIF can use the full thirty second limit");
+    const double largeLimit = opencapture::GifDurationLimit(SIZE{1920, 1080}, 30);
+    Check(largeLimit > 8.0 && largeLimit < 8.1,
+          "1080p30 GIF is shortened by the safe pixel budget");
 }
 
 } // namespace

@@ -44,6 +44,7 @@ if(OPENCAPTURE_BUILD_APP)
     find_path(FFMPEG_INCLUDE_DIR libavutil/avutil.h REQUIRED)
     find_library(AVUTIL_LIBRARY avutil REQUIRED)
     find_library(AVCODEC_LIBRARY avcodec REQUIRED)
+    find_library(AVFILTER_LIBRARY avfilter REQUIRED)
     find_library(AVFORMAT_LIBRARY avformat REQUIRED)
 
     add_executable(OpenCapture WIN32
@@ -52,6 +53,7 @@ if(OPENCAPTURE_BUILD_APP)
         encoder/ffmpeg_d3d11_encoder.cpp
         encoder/ffmpeg_encoder_registry.cpp
         encoder/ffmpeg_muxer.cpp
+        encoder/ffmpeg_gif_converter.cpp
         gpu/d3d11_frame_processor.cpp
         image/screenshot_service.cpp
         platform/capture_target_picker.cpp
@@ -66,6 +68,7 @@ if(OPENCAPTURE_BUILD_APP)
         imgui::imgui
         ${AVUTIL_LIBRARY}
         ${AVCODEC_LIBRARY}
+        ${AVFILTER_LIBRARY}
         ${AVFORMAT_LIBRARY}
         d3d11
         d3dcompiler

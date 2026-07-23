@@ -62,6 +62,16 @@ std::wstring ReadEnvironmentWide(const wchar_t* name) {
     return length > 0 && length < value.size() ? std::wstring(value.data(), length) : std::wstring{};
 }
 
+int ReadEnvironmentInt(const wchar_t* name, int fallback) {
+    const auto value = ReadEnvironmentWide(name);
+    if (value.empty()) return fallback;
+    try {
+        return std::stoi(value);
+    } catch (...) {
+        return fallback;
+    }
+}
+
 std::uint64_t QpcTo100ns(std::int64_t qpc, std::int64_t frequency) {
     if (qpc <= 0 || frequency <= 0) return 0;
     const auto seconds = qpc / frequency;
@@ -131,6 +141,9 @@ bool Win32D3D11App::Initialize(HINSTANCE instance, int showCommand) {
     screenshotSmokeMode_ = std::wcsstr(GetCommandLineW(), L"--screenshot-smoke") != nullptr;
     recoverySmokeMode_ = std::wcsstr(GetCommandLineW(), L"--recovery-smoke") != nullptr;
     remuxSmokeMode_ = std::wcsstr(GetCommandLineW(), L"--remux-smoke") != nullptr;
+    gifConvertSmokeMode_ = std::wcsstr(GetCommandLineW(), L"--gif-convert-smoke") != nullptr;
+    gifRecordSmokeMode_ = std::wcsstr(GetCommandLineW(), L"--gif-record-smoke") != nullptr;
+    realtimeRecordSmokeMode_ = realtimeRecordSmokeMode_ || gifRecordSmokeMode_;
     nvencSmokeMode_ = nvencSmokeMode_ || recordSmokeMode_;
     if (recordSmokeMode_) recordSmokePath_ = ReadEnvironmentUtf8(L"OPENCAPTURE_RECORD_SMOKE");
     gpuNv12SmokeMode_ = gpuNv12SmokeMode_ || nvencSmokeMode_;
@@ -166,7 +179,17 @@ bool Win32D3D11App::Initialize(HINSTANCE instance, int showCommand) {
     initialized_ = true;
     ShowWindow(window_, showCommand);
     UpdateWindow(window_);
-    if (remuxSmokeMode_) {
+    if (gifConvertSmokeMode_) {
+        const auto input = ReadEnvironmentUtf8(L"OPENCAPTURE_GIF_INPUT");
+        const auto output = ReadEnvironmentUtf8(L"OPENCAPTURE_GIF_OUTPUT");
+        captureSmokeFailed_ = input.empty() || output.empty() ||
+            !gifConverter_.Convert(input, output, {128});
+        if (captureSmokeFailed_) WriteSmokeFailure(
+            gifConverter_.LastError().empty()
+                ? "OPENCAPTURE_GIF_INPUT and OPENCAPTURE_GIF_OUTPUT are required."
+                : gifConverter_.LastError());
+        PostMessageW(window_, WM_CLOSE, 0, 0);
+    } else if (remuxSmokeMode_) {
         const auto input = ReadEnvironmentUtf8(L"OPENCAPTURE_REMUX_INPUT");
         captureSmokeFailed_ = input.empty() || !RemuxRecordingToMp4(input);
         if (captureSmokeFailed_) WriteSmokeFailure(
@@ -209,8 +232,13 @@ bool Win32D3D11App::Initialize(HINSTANCE instance, int showCommand) {
         auto primary = std::find_if(monitors.begin(), monitors.end(), [](const MonitorEntry& monitor) { return monitor.primary; });
         if (primary == monitors.end() ||
             !targetPicker_.SelectMonitor(static_cast<std::size_t>(std::distance(monitors.begin(), primary))) ||
-            !StartRecording(60, 1, ReadEnvironmentUtf8(L"OPENCAPTURE_VIDEO_ENCODER"),
-                            true, false, mp4RecordSmokeMode_)) {
+            !StartRecording(gifRecordSmokeMode_ ? ReadEnvironmentInt(L"OPENCAPTURE_GIF_FPS", 12) : 60,
+                            gifRecordSmokeMode_ ? 0 : 1,
+                            ReadEnvironmentUtf8(L"OPENCAPTURE_VIDEO_ENCODER"),
+                            !gifRecordSmokeMode_, false, mp4RecordSmokeMode_,
+                            gifRecordSmokeMode_,
+                            ReadEnvironmentInt(L"OPENCAPTURE_GIF_HEIGHT", 480),
+                            ReadEnvironmentInt(L"OPENCAPTURE_GIF_COLORS", 128))) {
             captureSmokeFailed_ = true;
             WriteSmokeFailure(recordingState_.Error());
             PostMessageW(window_, WM_CLOSE, 0, 0);
@@ -705,6 +733,58 @@ bool Win32D3D11App::RemuxRecordingToMp4(std::string_view sourcePath) {
     return true;
 }
 
+bool Win32D3D11App::ConvertRecordingToGif() {
+    const std::filesystem::path source(ToWide(recordingPath_));
+    const std::filesystem::path destination(ToWide(gifOutputPath_));
+    const auto temporary = destination.parent_path() /
+        (destination.stem().wstring() + L".part.gif");
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(source, error) || error) {
+        frameProcessingError_ = "The GIF source recording is missing.";
+        gifStatus_ = frameProcessingError_;
+        return false;
+    }
+    if (std::filesystem::exists(destination, error) || std::filesystem::exists(temporary, error)) {
+        frameProcessingError_ = "The GIF output or temporary file already exists. The source MKV was kept.";
+        gifStatus_ = frameProcessingError_;
+        return false;
+    }
+    const auto sourceBytes = std::filesystem::file_size(source, error);
+    if (error || !HasRecordingSpace(ToUtf8(temporary.c_str()),
+                                    std::max<std::uint64_t>(128ULL * 1024 * 1024, sourceBytes * 2))) {
+        gifStatus_ = frameProcessingError_.empty()
+            ? "Not enough free space to create the GIF. The source MKV was kept."
+            : frameProcessingError_ + " The source MKV was kept.";
+        return false;
+    }
+    gifStatus_ = "Optimizing GIF colors...";
+    if (!gifConverter_.Convert(ToUtf8(source.c_str()), ToUtf8(temporary.c_str()), {gifColors_})) {
+        std::filesystem::remove(temporary, error);
+        frameProcessingError_ = gifConverter_.LastError() + " The source MKV was kept.";
+        gifStatus_ = frameProcessingError_;
+        return false;
+    }
+    std::filesystem::rename(temporary, destination, error);
+    if (error) {
+        std::filesystem::remove(temporary, error);
+        frameProcessingError_ = "Could not finalize the GIF name. The source MKV was kept.";
+        gifStatus_ = frameProcessingError_;
+        return false;
+    }
+    const auto gifBytes = std::filesystem::file_size(destination, error);
+    const bool sizeKnown = !error;
+    std::error_code removeError;
+    std::filesystem::remove(source, removeError);
+    std::ostringstream status;
+    status << "GIF saved: " << gifOutputPath_;
+    if (sizeKnown) status << " (" << (gifBytes / 1024) << " KiB)";
+    if (removeError) status << " The safe source MKV was also kept.";
+    gifStatus_ = status.str();
+    recordingPath_ = gifOutputPath_;
+    frameProcessingError_.clear();
+    return true;
+}
+
 std::wstring Win32D3D11App::MakeScreenshotPath() const {
     std::filesystem::path directory(outputDirectory_);
     std::error_code error;
@@ -782,7 +862,8 @@ bool Win32D3D11App::ProcessScreenshotFrame(const CapturedFrame& frame) {
 }
 
 bool Win32D3D11App::StartRecording(int framesPerSecond, int quality, std::string requestedEncoder,
-                                   bool systemAudio, bool microphone, bool remuxToMp4) {
+                                   bool systemAudio, bool microphone, bool remuxToMp4,
+                                   bool gif, int gifHeight, int gifColors) {
     if (recordingState_.Phase() == SessionPhase::Failed) recordingState_.Reset();
     if (!recordingState_.BeginStart()) return false;
     const auto candidates = encoderRegistry_.H264Candidates(requestedEncoder);
@@ -799,6 +880,24 @@ bool Win32D3D11App::StartRecording(int framesPerSecond, int quality, std::string
         FailRecording("Could not create a recording path in the output folder.");
         return false;
     }
+    recordingGif_ = gif;
+    recordingMaximumHeight_ = gif ? std::clamp(gifHeight, 360, 1080) : 0;
+    gifColors_ = std::clamp(gifColors, 32, 256);
+    gifDurationLimit_ = 30.0;
+    gifOutputPath_.clear();
+    gifStatus_.clear();
+    if (recordingGif_) {
+        std::filesystem::path source(ToWide(recordingPath_));
+        const auto baseStem = source.stem().wstring();
+        gifOutputPath_ = ToUtf8((source.parent_path() / (baseStem + L".gif")).c_str());
+        source = source.parent_path() / (baseStem + L".gif-source.mkv");
+        recordingPath_ = ToUtf8(source.c_str());
+        if (std::filesystem::exists(source) ||
+            std::filesystem::exists(std::filesystem::path(ToWide(gifOutputPath_)))) {
+            FailRecording("A GIF source or output with the same name already exists.");
+            return false;
+        }
+    }
     recordingWorkingPath_ = MakeWorkingRecordingPath(recordingPath_);
     constexpr std::uint64_t minimumFreeSpace = 512ULL * 1024 * 1024;
     if (recordingWorkingPath_.empty() || !HasRecordingSpace(recordingWorkingPath_, minimumFreeSpace)) {
@@ -810,7 +909,7 @@ bool Win32D3D11App::StartRecording(int framesPerSecond, int quality, std::string
         FailRecording("A recording with the same temporary name already exists.");
         return false;
     }
-    recordingFramesPerSecond_ = std::clamp(framesPerSecond, 15, 120);
+    recordingFramesPerSecond_ = std::clamp(framesPerSecond, 1, 120);
     recordingFrameCount_ = 0;
     recordingElapsedSeconds_ = 0.0;
     recordingStartQpc_ = 0;
@@ -830,6 +929,8 @@ bool Win32D3D11App::StartRecording(int framesPerSecond, int quality, std::string
     audioEncoder_.Close();
     systemAudioCapture_.Stop();
     microphoneCapture_.Stop();
+    systemAudio = systemAudio && !recordingGif_;
+    microphone = microphone && !recordingGif_;
     systemAudioEnabled_ = systemAudio && systemAudioCapture_.Start(AudioEndpointKind::SystemLoopback);
     microphoneEnabled_ = microphone && microphoneCapture_.Start(AudioEndpointKind::Microphone);
     audioStatus_.clear();
@@ -846,7 +947,7 @@ bool Win32D3D11App::StartRecording(int framesPerSecond, int quality, std::string
                             ? "System audio + microphone ready"
                             : (systemAudioEnabled_ ? "System audio ready" : "Microphone ready");
     } else if (!systemAudio && !microphone) {
-        audioStatus_ = "Audio disabled";
+        audioStatus_ = recordingGif_ ? "GIF does not include audio" : "Audio disabled";
     }
     capture_.Stop();
     if (!capture_.Start(targetPicker_.Selected(), device_.Get())) {
@@ -952,12 +1053,14 @@ void Win32D3D11App::StopRecording() {
     }
     ScanRecoverableRecordings();
     recordingState_.MarkStopped();
-    if (recordingRemuxToMp4_) RemuxRecordingToMp4(recordingPath_);
+    if (recordingGif_) ConvertRecordingToGif();
+    else if (recordingRemuxToMp4_) RemuxRecordingToMp4(recordingPath_);
 }
 
 bool Win32D3D11App::ProcessRecordingFrame(CapturedFrame frame) {
     FrameProcessOptions options{};
     options.pixelFormat = FramePixelFormat::Nv12;
+    options.maximumOutputHeight = recordingMaximumHeight_;
     auto processed = frameProcessor_.Process(frame, capture_.ActiveTarget(), options);
     if (!processed) {
         FailRecording(frameProcessor_.LastError());
@@ -990,6 +1093,15 @@ bool Win32D3D11App::ProcessRecordingFrame(CapturedFrame frame) {
         audioEncoder_.SetPacketCallback([this](AVPacket* packet) { return muxer_.WriteAudioPacket(packet); });
         recordingStartQpc_ = frame.qpcTimestamp;
         audioMixer_.Reset(QpcTo100ns(recordingStartQpc_, recordingQpcFrequency_));
+        if (recordingGif_) {
+            gifDurationLimit_ = GifDurationLimit(
+                processed->contentSize, recordingFramesPerSecond_);
+            std::ostringstream status;
+            status << "GIF recording: " << processed->contentSize.cx << 'x' << processed->contentSize.cy
+                   << " at " << recordingFramesPerSecond_ << " fps; auto-stop "
+                   << static_cast<int>(gifDurationLimit_) << " s.";
+            gifStatus_ = status.str();
+        }
         recordingState_.MarkRecording();
     }
     const auto delta = EffectiveRecordingDelta(frame.qpcTimestamp);
@@ -999,7 +1111,10 @@ bool Win32D3D11App::ProcessRecordingFrame(CapturedFrame frame) {
             if (!SendRecordingFrame(*processedFrame_, recordingLastPts_ + 1)) return false;
         }
     }
-    if (pts <= recordingLastPts_) pts = recordingLastPts_ + 1;
+    if (pts <= recordingLastPts_) {
+        recordingElapsedSeconds_ = static_cast<double>(delta) / static_cast<double>(recordingQpcFrequency_);
+        return true;
+    }
     if (!SendRecordingFrame(*processed, pts)) return false;
     recordingElapsedSeconds_ = static_cast<double>(delta) / static_cast<double>(recordingQpcFrequency_);
     processedFrame_ = std::move(processed);
@@ -1366,7 +1481,8 @@ void Win32D3D11App::Render() {
         !recordingPathError;
     const RecordingUiState recordingUi{
         RecordingActive(), recordingPhase == SessionPhase::Starting,
-        recordingPhase == SessionPhase::Paused, canRemux, recordingPath_, recordingError,
+        recordingPhase == SessionPhase::Paused, RecordingActive() && recordingGif_,
+        canRemux, recordingPath_, recordingError,
         activeEncoderName_, recordingFrameCount_, recordingElapsedSeconds_};
     std::vector<EncoderUiChoice> encoderChoices;
     for (const auto& capability : encoderRegistry_.Capabilities()) {
@@ -1375,7 +1491,8 @@ void Win32D3D11App::Render() {
         }
     }
     const auto command = MainPanel::Draw(gpuName_, ffmpegVersion_, encoderSummary_, encoderChoices, frameProcessingError_,
-                                         screenshotStatus_, audioStatus_, recoveryStatus_, remuxStatus_, outputDirectoryUtf8_,
+                                         screenshotStatus_, audioStatus_, recoveryStatus_, remuxStatus_, gifStatus_,
+                                         outputDirectoryUtf8_,
                                          recoverableRecordings_,
                                          recordingUi, targetPicker_, capture_, window_, device_.Get());
     if (command.chooseOutputDirectory && !RecordingActive()) ChooseOutputDirectory();
@@ -1386,6 +1503,10 @@ void Win32D3D11App::Render() {
         StartRecording(command.framesPerSecond, command.quality, command.encoderName,
                        command.systemAudio, command.microphone, command.remuxToMp4);
     }
+    if (command.startGif) {
+        StartRecording(command.gifFramesPerSecond, 0, command.encoderName,
+                       false, false, false, true, command.gifHeight, command.gifColors);
+    }
     if (command.stopRecording) StopRecording();
     if (command.pauseRecording) PauseRecording();
     if (command.resumeRecording) ResumeRecording();
@@ -1393,6 +1514,11 @@ void Win32D3D11App::Render() {
     if (command.copyScreenshot) StartScreenshot(ScreenshotDestination::Clipboard);
     if (command.saveScreenshot) StartScreenshot(ScreenshotDestination::File);
     if (command.saveAndCopyScreenshot) StartScreenshot(ScreenshotDestination::FileAndClipboard);
+    if (recordingGif_ && recordingState_.Phase() == SessionPhase::Recording &&
+        recordingElapsedSeconds_ >= gifDurationLimit_) {
+        gifStatus_ = "GIF safety limit reached; creating the GIF...";
+        StopRecording();
+    }
 
     if (captureSmokeMode_ &&
         ((!gpuCropSmokeMode_ && capture_.FrameCount() >= 1) ||
@@ -1432,7 +1558,8 @@ void Win32D3D11App::Render() {
                 }
             }
         } else if ((!pauseRecordSmokeMode_ || pauseSmokeResumed_) &&
-                   recordingElapsedSeconds_ >= 1.0 && recordingFrameCount_ >= 55) {
+                   recordingElapsedSeconds_ >= 1.0 &&
+                   recordingFrameCount_ >= (gifRecordSmokeMode_ ? 10ULL : 55ULL)) {
             if (recordFailureSmokeMode_) {
                 FailRecording("Forced recording failure smoke.");
                 captureSmokeFailed_ = true;

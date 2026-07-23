@@ -17,6 +17,7 @@ struct RecordingUiState {
     bool active{};
     bool starting{};
     bool paused{};
+    bool gif{};
     bool canRemux{};
     std::string_view outputPath;
     std::string_view error;
@@ -47,11 +48,15 @@ struct MainPanelCommand {
     bool resumeRecording{};
     bool remuxLastRecording{};
     bool remuxToMp4{};
+    bool startGif{};
     bool copyScreenshot{};
     bool saveScreenshot{};
     bool saveAndCopyScreenshot{};
     int framesPerSecond{60};
     int quality{1};
+    int gifFramesPerSecond{12};
+    int gifHeight{720};
+    int gifColors{256};
     bool systemAudio{true};
     bool microphone{};
     std::string encoderName;
@@ -67,6 +72,7 @@ public:
                                  std::string_view audioStatus,
                                  std::string_view recoveryStatus,
                                  std::string_view remuxStatus,
+                                 std::string_view gifStatus,
                                  std::string_view outputDirectory,
                                  const std::vector<RecoverableRecordingUiItem>& recoverableRecordings,
                                  const RecordingUiState& recording,

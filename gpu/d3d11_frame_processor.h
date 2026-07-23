@@ -20,6 +20,7 @@ enum class FramePixelFormat {
 
 struct FrameProcessOptions {
     SIZE outputSize{};
+    LONG maximumOutputHeight{};
     FramePixelFormat pixelFormat{FramePixelFormat::Bgra};
 };
 

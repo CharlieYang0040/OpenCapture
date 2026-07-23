@@ -16,12 +16,14 @@
       "features": [
         "amf",
         "avcodec",
+        "avfilter",
         "avformat",
         "ffprobe",
         "nvcodec",
         "openh264",
         "qsv",
-        "swresample"
+        "swresample",
+        "swscale"
       ]
     }
   ]

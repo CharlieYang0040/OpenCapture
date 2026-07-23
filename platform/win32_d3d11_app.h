@@ -12,6 +12,7 @@
 #include "encoder/ffmpeg_d3d11_encoder.h"
 #include "encoder/ffmpeg_encoder_registry.h"
 #include "encoder/ffmpeg_muxer.h"
+#include "encoder/ffmpeg_gif_converter.h"
 #include "core/session_state.h"
 #include "platform/capture_target_picker.h"
 #include "platform/windows_graphics_capture.h"
@@ -48,7 +49,8 @@ private:
     void PumpRecordingClock();
     void PumpRecordingAudio(bool finalDrain = false);
     bool StartRecording(int framesPerSecond, int quality, std::string requestedEncoder = {},
-                        bool systemAudio = true, bool microphone = false, bool remuxToMp4 = false);
+                        bool systemAudio = true, bool microphone = false, bool remuxToMp4 = false,
+                        bool gif = false, int gifHeight = 720, int gifColors = 256);
     bool PauseRecording();
     bool ResumeRecording();
     void StopRecording();
@@ -64,6 +66,7 @@ private:
     void ScanRecoverableRecordings();
     bool RecoverRecording(std::size_t index);
     bool RemuxRecordingToMp4(std::string_view sourcePath);
+    bool ConvertRecordingToGif();
     [[nodiscard]] std::int64_t EffectiveRecordingDelta(std::int64_t qpc) const noexcept;
     [[nodiscard]] std::wstring MakeScreenshotPath() const;
     bool StartScreenshot(ScreenshotDestination destination);
@@ -101,12 +104,19 @@ private:
     FFmpegD3D11Encoder videoEncoder_;
     FFmpegAudioEncoder audioEncoder_;
     FFmpegMuxer muxer_;
+    FFmpegGifConverter gifConverter_;
     WasapiCapture systemAudioCapture_;
     WasapiCapture microphoneCapture_;
     AudioTimelineMixer audioMixer_;
     bool systemAudioEnabled_{};
     bool microphoneEnabled_{};
     bool recordingRemuxToMp4_{};
+    bool recordingGif_{};
+    int recordingMaximumHeight_{};
+    int gifColors_{256};
+    double gifDurationLimit_{30.0};
+    std::string gifOutputPath_;
+    std::string gifStatus_;
     std::uint64_t encodedPacketCount_{};
     std::string recordSmokePath_;
     SessionState recordingState_;
@@ -139,6 +149,8 @@ private:
     bool screenshotSmokeMode_{};
     bool recoverySmokeMode_{};
     bool remuxSmokeMode_{};
+    bool gifConvertSmokeMode_{};
+    bool gifRecordSmokeMode_{};
     bool realtimeRecordSmokeComplete_{};
     bool pauseSmokeStarted_{};
     bool pauseSmokeResumed_{};

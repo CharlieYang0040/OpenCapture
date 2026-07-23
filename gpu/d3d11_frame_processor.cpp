@@ -153,7 +153,11 @@ std::optional<ProcessedFrame> D3D11FrameProcessor::Process(
         return std::nullopt;
     }
     const bool nv12 = options.pixelFormat == FramePixelFormat::Nv12;
-    const SIZE outputSize = NormalizeOutputSize(options.outputSize, SIZE{cropWidth, cropHeight}, nv12);
+    const SIZE sourceSize{cropWidth, cropHeight};
+    const SIZE requestedSize = options.maximumOutputHeight > 0
+        ? FitOutputHeight(sourceSize, options.maximumOutputHeight, nv12)
+        : options.outputSize;
+    const SIZE outputSize = NormalizeOutputSize(requestedSize, sourceSize, nv12);
     if (outputSize.cx <= 0 || outputSize.cy <= 0) {
         SetError("The requested GPU output size is empty.");
         return std::nullopt;

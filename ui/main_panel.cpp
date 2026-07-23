@@ -92,6 +92,7 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
                                  std::string_view audioStatus,
                                  std::string_view recoveryStatus,
                                  std::string_view remuxStatus,
+                                 std::string_view gifStatus,
                                  std::string_view outputDirectory,
                                  const std::vector<RecoverableRecordingUiItem>& recoverableRecordings,
                                  const RecordingUiState& recording,
@@ -298,7 +299,7 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
 
     ImGui::Spacing();
     ImGui::SeparatorText("Output");
-    ImGui::TextWrapped("Screenshots and video recordings are saved in the same folder.");
+    ImGui::TextWrapped("Screenshots, video recordings, and GIF files are saved in the same folder.");
     ImGui::TextWrapped("Folder: %.*s", static_cast<int>(outputDirectory.size()), outputDirectory.data());
     if (recording.active) ImGui::BeginDisabled();
     if (ImGui::Button("Change output folder...", ImVec2(210.0F, 32.0F))) {
@@ -366,30 +367,25 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     }
 
     ImGui::Spacing();
-    ImGui::SeparatorText("Video");
-    ImGui::TextUnformatted("Record the selected target with the FPS, quality, and audio options above.");
+    ImGui::SeparatorText(recording.gif ? "GIF recording" : "Video");
+    ImGui::TextUnformatted(recording.gif
+        ? "Recording a silent, size-controlled GIF source from the selected target."
+        : "Record the selected target with the FPS, quality, and audio options above.");
     if (recording.active) {
         if (recording.paused) {
-            if (ImGui::Button("Resume video recording", ImVec2(205.0F, 44.0F))) {
+            if (ImGui::Button(recording.gif ? "Resume GIF recording" : "Resume video recording", ImVec2(205.0F, 44.0F))) {
                 command.resumeRecording = true;
             }
-        } else if (ImGui::Button("Pause video recording", ImVec2(205.0F, 44.0F))) {
+        } else if (ImGui::Button(recording.gif ? "Pause GIF recording" : "Pause video recording", ImVec2(205.0F, 44.0F))) {
             command.pauseRecording = true;
         }
         ImGui::SameLine();
-        if (ImGui::Button("Stop video recording", ImVec2(205.0F, 44.0F))) command.stopRecording = true;
+        if (ImGui::Button(recording.gif ? "Stop and create GIF" : "Stop video recording", ImVec2(205.0F, 44.0F))) {
+            command.stopRecording = true;
+        }
     } else if (ImGui::Button("Start video recording", ImVec2(205.0F, 44.0F))) {
         command.startRecording = true;
         if (selectedEncoder > 0) command.encoderName = encoderChoices[static_cast<std::size_t>(selectedEncoder - 1)].name;
-    }
-    if (!recording.active) {
-        ImGui::SameLine();
-        ImGui::BeginDisabled();
-        ImGui::Button("Record GIF (coming soon)", ImVec2(205.0F, 44.0F));
-        ImGui::EndDisabled();
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-            ImGui::SetTooltip("GIF recording is planned but not implemented yet.");
-        }
     }
     if (recording.active || !recording.outputPath.empty()) {
         ImGui::Text("Recorded: %llu frames | %.2f s",
@@ -409,6 +405,40 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     }
     if (!remuxStatus.empty()) {
         ImGui::TextWrapped("%.*s", static_cast<int>(remuxStatus.size()), remuxStatus.data());
+    }
+    static int gifFpsIndex = 2;
+    static int gifHeightIndex = 2;
+    static int gifColorIndex = 3;
+    constexpr std::array gifFpsValues{6, 10, 12, 15, 20, 30};
+    constexpr std::array gifFpsLabels{"6 fps", "10 fps", "12 fps", "15 fps", "20 fps", "30 fps"};
+    constexpr std::array gifHeightValues{360, 480, 720, 1080};
+    constexpr std::array gifHeightLabels{"360p", "480p", "720p", "1080p"};
+    constexpr std::array gifColorValues{64, 128, 192, 256};
+    constexpr std::array gifColorLabels{"64 colors", "128 colors", "192 colors", "256 colors"};
+    ImGui::Spacing();
+    ImGui::SeparatorText("GIF size controls");
+    ImGui::TextWrapped("Lower resolution, FPS, and color count create much smaller GIF files. Recording stops automatically at 30 seconds or the safe pixel budget.");
+    if (recording.active) ImGui::BeginDisabled();
+    ImGui::Combo("GIF FPS", &gifFpsIndex, gifFpsLabels.data(), static_cast<int>(gifFpsLabels.size()));
+    ImGui::Combo("GIF resolution", &gifHeightIndex, gifHeightLabels.data(), static_cast<int>(gifHeightLabels.size()));
+    ImGui::Combo("GIF colors", &gifColorIndex, gifColorLabels.data(), static_cast<int>(gifColorLabels.size()));
+    if (recording.active) ImGui::EndDisabled();
+    command.gifFramesPerSecond = gifFpsValues[static_cast<std::size_t>(gifFpsIndex)];
+    command.gifHeight = gifHeightValues[static_cast<std::size_t>(gifHeightIndex)];
+    command.gifColors = gifColorValues[static_cast<std::size_t>(gifColorIndex)];
+    if (command.gifHeight >= 1080 || command.gifFramesPerSecond >= 30) {
+        ImGui::TextColored(ImVec4(1.0F, 0.75F, 0.25F, 1.0F),
+                           "Large GIF warning: use 720p / 12 fps or lower for sharing.");
+    }
+    if (!recording.active &&
+        ImGui::Button("Start GIF recording", ImVec2(205.0F, 44.0F))) {
+        command.startGif = true;
+    }
+    if (!recording.active && ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Records without audio, then creates an optimized GIF.");
+    }
+    if (!gifStatus.empty()) {
+        ImGui::TextWrapped("%.*s", static_cast<int>(gifStatus.size()), gifStatus.data());
     }
     if (!recording.error.empty()) {
         ImGui::TextColored(ImVec4(1.0F, 0.4F, 0.35F, 1.0F), "%.*s",
