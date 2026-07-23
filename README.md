@@ -35,6 +35,8 @@ OpenCapture는 Windows 10/11을 위한 네이티브 화면 캡처 애플리케�
 - 임시 파일 없이 Windows `CF_DIBV5`로 전달하는 클립보드 경로
 - event-driven WASAPI 시스템 loopback·마이크 캡처 기반과 진단 도구
 - 48kHz stereo 시스템·마이크 믹싱, AAC 인코딩과 MKV A/V muxing
+- `.part.mkv` 안전 기록, 512MiB 저장 공간 검사 및 정상 종료 후 최종 파일 확정
+- 미완료 MKV 검색과 기존 파일 충돌 방지
 - drop-oldest 정책을 사용하는 제한 큐
 - 핵심 모델 단위 테스트와 Windows GitHub Actions CI
 
@@ -42,7 +44,7 @@ OpenCapture는 Windows 10/11을 위한 네이티브 화면 캡처 애플리케�
 
 - 오디오 장치 선택, 개별 볼륨·음소거, Opus와 장시간 드리프트 보정
 - GIF 녹화와 MP4 remux
-- 임시 파일, 복구, 일시정지 및 저장 공간 검사
+- 미완료 MKV 복구 실행, 일시정지와 MP4 remux
 - Desktop Duplication, 전역 단축키와 트레이
 - QSV/AMF 실기 검증과 장시간 성능 시험
 

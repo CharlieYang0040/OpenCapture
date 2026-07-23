@@ -51,6 +51,7 @@ public:
                                  std::string_view frameProcessingError,
                                  std::string_view screenshotStatus,
                                  std::string_view audioStatus,
+                                 std::string_view recoveryStatus,
                                  const RecordingUiState& recording,
                                  CaptureTargetPicker& picker, WindowsGraphicsCapture& capture,
                                  HWND owner, ID3D11Device* device);

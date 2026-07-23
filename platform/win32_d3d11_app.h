@@ -51,6 +51,10 @@ private:
     void FailRecording(std::string error);
     [[nodiscard]] bool RecordingActive() const noexcept;
     [[nodiscard]] std::string MakeRecordingPath() const;
+    [[nodiscard]] std::string MakeWorkingRecordingPath(const std::string& finalPath) const;
+    bool HasRecordingSpace(const std::string& path, std::uint64_t minimumBytes);
+    bool CommitRecordingFile();
+    void ScanRecoverableRecordings();
     [[nodiscard]] std::wstring MakeScreenshotPath() const;
     bool StartScreenshot(ScreenshotDestination destination);
     bool RunNvencSmoke(const ProcessedFrame& frame);
@@ -75,6 +79,7 @@ private:
     std::string frameProcessingError_;
     std::string screenshotStatus_;
     std::string audioStatus_;
+    std::string recoveryStatus_;
     std::optional<ScreenshotDestination> pendingScreenshot_;
     bool screenshotOwnsCapture_{};
     std::uint32_t adapterVendorId_{};
@@ -91,6 +96,7 @@ private:
     std::string recordSmokePath_;
     SessionState recordingState_;
     std::string recordingPath_;
+    std::string recordingWorkingPath_;
     std::string requestedEncoderName_;
     std::string activeEncoderName_;
     int recordingFramesPerSecond_{60};
@@ -108,6 +114,7 @@ private:
     bool nvencSmokeMode_{};
     bool recordSmokeMode_{};
     bool realtimeRecordSmokeMode_{};
+    bool recordFailureSmokeMode_{};
     bool encoderFallbackSmokeMode_{};
     bool avMuxSmokeMode_{};
     bool screenshotSmokeMode_{};

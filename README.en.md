@@ -35,6 +35,8 @@ Implemented:
 - Diskless Windows clipboard transfer through `CF_DIBV5`
 - Event-driven WASAPI loopback/microphone capture foundation and probe
 - 48 kHz stereo mixing, AAC encoding, and synchronized MKV A/V muxing
+- Safe `.part.mkv` recording, 512 MiB free-space gate, and final-name commit
+- Incomplete-MKV discovery and output collision avoidance
 - Bounded queue with a drop-oldest overload policy
 - Core unit tests and Windows GitHub Actions CI
 
@@ -42,7 +44,7 @@ Not implemented yet:
 
 - Audio device selection, per-source volume/mute, Opus, and long-run drift correction
 - GIF recording and MP4 remux
-- Temporary output, recovery, pause, and free-space checks
+- Incomplete-MKV recovery actions, pause, and MP4 remux
 - Desktop Duplication, global hotkeys, and tray integration
 - QSV/AMF hardware validation and long-running performance tests
 

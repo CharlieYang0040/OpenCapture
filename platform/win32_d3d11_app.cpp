@@ -67,6 +67,17 @@ std::uint64_t QpcTo100ns(std::int64_t qpc, std::int64_t frequency) {
                static_cast<std::uint64_t>(frequency);
 }
 
+std::wstring ToWide(std::string_view text) {
+    if (text.empty()) return {};
+    const int required = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()),
+                                             nullptr, 0);
+    if (required <= 0) return {};
+    std::wstring result(static_cast<std::size_t>(required), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()),
+                        result.data(), required);
+    return result;
+}
+
 } // namespace
 
 Win32D3D11App::~Win32D3D11App() { Shutdown(); }
@@ -80,6 +91,8 @@ bool Win32D3D11App::Initialize(HINSTANCE instance, int showCommand) {
     nvencSmokeMode_ = std::wcsstr(GetCommandLineW(), L"--nvenc-smoke") != nullptr;
     recordSmokeMode_ = std::wcsstr(GetCommandLineW(), L"--record-smoke") != nullptr;
     realtimeRecordSmokeMode_ = std::wcsstr(GetCommandLineW(), L"--realtime-record-smoke") != nullptr;
+    recordFailureSmokeMode_ = std::wcsstr(GetCommandLineW(), L"--record-failure-smoke") != nullptr;
+    realtimeRecordSmokeMode_ = realtimeRecordSmokeMode_ || recordFailureSmokeMode_;
     encoderFallbackSmokeMode_ = std::wcsstr(GetCommandLineW(), L"--encoder-fallback-smoke") != nullptr;
     avMuxSmokeMode_ = std::wcsstr(GetCommandLineW(), L"--av-mux-smoke") != nullptr;
     encoderFallbackSmokeMode_ = encoderFallbackSmokeMode_ || avMuxSmokeMode_;
@@ -114,6 +127,7 @@ bool Win32D3D11App::Initialize(HINSTANCE instance, int showCommand) {
     ffmpegVersion_ = av_version_info();
     encoderRegistry_.Probe(adapterVendorId_);
     encoderSummary_ = encoderRegistry_.Summary();
+    ScanRecoverableRecordings();
     initialized_ = true;
     ShowWindow(window_, showCommand);
     UpdateWindow(window_);
@@ -244,7 +258,14 @@ bool Win32D3D11App::RecordingActive() const noexcept {
 
 std::string Win32D3D11App::MakeRecordingPath() const {
     if (const auto overridePath = ReadEnvironmentUtf8(L"OPENCAPTURE_RECORD_OUTPUT"); !overridePath.empty()) {
-        return overridePath;
+        const auto requested = std::filesystem::path(ToWide(overridePath));
+        if (!std::filesystem::exists(requested)) return overridePath;
+        for (int suffix = 1; suffix < 1000; ++suffix) {
+            auto candidate = requested.parent_path() /
+                (requested.stem().wstring() + L"_" + std::to_wstring(suffix) + requested.extension().wstring());
+            if (!std::filesystem::exists(candidate)) return ToUtf8(candidate.c_str());
+        }
+        return {};
     }
     PWSTR videosPath{};
     if (FAILED(SHGetKnownFolderPath(FOLDERID_Videos, KF_FLAG_CREATE, nullptr, &videosPath))) return {};
@@ -260,8 +281,77 @@ std::string Win32D3D11App::MakeRecordingPath() const {
     swprintf_s(fileName, L"OpenCapture_%04u%02u%02u_%02u%02u%02u_%03u.mkv",
                time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute,
                time.wSecond, time.wMilliseconds);
-    directory /= fileName;
-    return ToUtf8(directory.c_str());
+    const std::filesystem::path base = directory / fileName;
+    if (!std::filesystem::exists(base)) return ToUtf8(base.c_str());
+    for (int suffix = 1; suffix < 1000; ++suffix) {
+        const auto candidate = directory /
+            (base.stem().wstring() + L"_" + std::to_wstring(suffix) + base.extension().wstring());
+        if (!std::filesystem::exists(candidate)) return ToUtf8(candidate.c_str());
+    }
+    return {};
+}
+
+std::string Win32D3D11App::MakeWorkingRecordingPath(const std::string& finalPath) const {
+    const std::filesystem::path final(ToWide(finalPath));
+    const auto working = final.parent_path() /
+        (final.stem().wstring() + L".part" + final.extension().wstring());
+    return ToUtf8(working.c_str());
+}
+
+bool Win32D3D11App::HasRecordingSpace(const std::string& path, std::uint64_t minimumBytes) {
+    std::error_code error;
+    const auto information = std::filesystem::space(
+        std::filesystem::path(ToWide(path)).parent_path(), error);
+    if (error) {
+        frameProcessingError_ = "Could not query free space for the recording folder.";
+        return false;
+    }
+    if (information.available < minimumBytes) {
+        std::ostringstream message;
+        message << "Not enough free space to start recording. At least "
+                << (minimumBytes / (1024 * 1024)) << " MiB is required.";
+        frameProcessingError_ = message.str();
+        return false;
+    }
+    return true;
+}
+
+bool Win32D3D11App::CommitRecordingFile() {
+    if (recordingWorkingPath_.empty() || recordingPath_.empty()) return false;
+    const std::filesystem::path working(ToWide(recordingWorkingPath_));
+    const std::filesystem::path final(ToWide(recordingPath_));
+    std::error_code error;
+    if (!std::filesystem::exists(working, error) || error || std::filesystem::exists(final, error)) {
+        frameProcessingError_ = "Could not finalize the recording name; the recoverable .part.mkv file was kept.";
+        return false;
+    }
+    std::filesystem::rename(working, final, error);
+    if (error) {
+        frameProcessingError_ = "Could not finalize the recording name; the recoverable .part.mkv file was kept.";
+        return false;
+    }
+    return true;
+}
+
+void Win32D3D11App::ScanRecoverableRecordings() {
+    recoveryStatus_.clear();
+    PWSTR videosPath{};
+    if (FAILED(SHGetKnownFolderPath(FOLDERID_Videos, KF_FLAG_DEFAULT, nullptr, &videosPath))) return;
+    const std::filesystem::path directory = std::filesystem::path(videosPath) / L"OpenCapture";
+    CoTaskMemFree(videosPath);
+    std::error_code error;
+    if (!std::filesystem::exists(directory, error) || error) return;
+    std::size_t count{};
+    for (std::filesystem::directory_iterator iterator(directory, error), end; !error && iterator != end;
+         iterator.increment(error)) {
+        if (iterator->is_regular_file(error) && iterator->path().filename().wstring().ends_with(L".part.mkv")) {
+            ++count;
+        }
+    }
+    if (count > 0) {
+        recoveryStatus_ = std::to_string(count) +
+            " recoverable .part.mkv recording(s) found in Videos/OpenCapture.";
+    }
 }
 
 std::wstring Win32D3D11App::MakeScreenshotPath() const {
@@ -346,9 +436,22 @@ bool Win32D3D11App::StartRecording(int framesPerSecond, int quality, std::string
                           : "The requested H.264 encoder is not available on the active adapter.");
         return false;
     }
+    static constexpr std::array<std::int64_t, 3> bitRates{6'000'000, 10'000'000, 16'000'000};
+    recordingBitRate_ = bitRates[static_cast<std::size_t>(std::clamp(quality, 0, 2))];
     recordingPath_ = MakeRecordingPath();
     if (recordingPath_.empty()) {
         FailRecording("Could not create the OpenCapture folder under Videos.");
+        return false;
+    }
+    recordingWorkingPath_ = MakeWorkingRecordingPath(recordingPath_);
+    constexpr std::uint64_t minimumFreeSpace = 512ULL * 1024 * 1024;
+    if (recordingWorkingPath_.empty() || !HasRecordingSpace(recordingWorkingPath_, minimumFreeSpace)) {
+        FailRecording(frameProcessingError_.empty() ? "Could not prepare the temporary recording path."
+                                                    : frameProcessingError_);
+        return false;
+    }
+    if (std::filesystem::exists(std::filesystem::path(ToWide(recordingWorkingPath_)))) {
+        FailRecording("A recording with the same temporary name already exists.");
         return false;
     }
     recordingFramesPerSecond_ = std::clamp(framesPerSecond, 15, 120);
@@ -390,8 +493,6 @@ bool Win32D3D11App::StartRecording(int framesPerSecond, int quality, std::string
         FailRecording(capture_.LastError().empty() ? "Could not start Windows Graphics Capture." : capture_.LastError());
         return false;
     }
-    static constexpr std::array<std::int64_t, 3> bitRates{6'000'000, 10'000'000, 16'000'000};
-    recordingBitRate_ = bitRates[static_cast<std::size_t>(std::clamp(quality, 0, 2))];
     frameProcessingError_.clear();
     return true;
 }
@@ -429,6 +530,18 @@ void Win32D3D11App::StopRecording() {
     encodedPacketCount_ = videoEncoder_.PacketCount();
     muxer_.Close();
     videoEncoder_.Close();
+    audioEncoder_.Close();
+    if (recordingFrameCount_ == 0 &&
+        !std::filesystem::exists(std::filesystem::path(ToWide(recordingWorkingPath_)))) {
+        recordingState_.MarkStopped();
+        return;
+    }
+    if (!CommitRecordingFile()) {
+        recordingState_.Fail(frameProcessingError_);
+        ScanRecoverableRecordings();
+        return;
+    }
+    ScanRecoverableRecordings();
     recordingState_.MarkStopped();
 }
 
@@ -459,7 +572,7 @@ bool Win32D3D11App::ProcessRecordingFrame(CapturedFrame frame) {
             FailRecording(audioEncoder_.LastError());
             return false;
         }
-        if (!muxer_.Open(recordingPath_, videoEncoder_.CodecContext(), audioEncoder_.CodecContext())) {
+        if (!muxer_.Open(recordingWorkingPath_, videoEncoder_.CodecContext(), audioEncoder_.CodecContext())) {
             FailRecording(muxer_.LastError());
             return false;
         }
@@ -828,7 +941,7 @@ void Win32D3D11App::Render() {
         }
     }
     const auto command = MainPanel::Draw(gpuName_, ffmpegVersion_, encoderSummary_, encoderChoices, frameProcessingError_,
-                                         screenshotStatus_, audioStatus_,
+                                         screenshotStatus_, audioStatus_, recoveryStatus_,
                                          recordingUi, targetPicker_, capture_, window_, device_.Get());
     if (command.startRecording) {
         StartRecording(command.framesPerSecond, command.quality, command.encoderName,
@@ -852,8 +965,14 @@ void Win32D3D11App::Render() {
             WriteSmokeFailure(recordingState_.Error());
             PostMessageW(window_, WM_CLOSE, 0, 0);
         } else if (recordingElapsedSeconds_ >= 1.0 && recordingFrameCount_ >= 55) {
-            StopRecording();
-            realtimeRecordSmokeComplete_ = true;
+            if (recordFailureSmokeMode_) {
+                FailRecording("Forced recording failure smoke.");
+                captureSmokeFailed_ = true;
+                WriteSmokeFailure(recordingState_.Error());
+            } else {
+                StopRecording();
+                realtimeRecordSmokeComplete_ = true;
+            }
             PostMessageW(window_, WM_CLOSE, 0, 0);
         }
     }

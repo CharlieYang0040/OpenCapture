@@ -90,6 +90,7 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
                                  std::string_view frameProcessingError,
                                  std::string_view screenshotStatus,
                                  std::string_view audioStatus,
+                                 std::string_view recoveryStatus,
                                  const RecordingUiState& recording,
                                  CaptureTargetPicker& picker, WindowsGraphicsCapture& capture,
                                  HWND owner, ID3D11Device* device) {
@@ -348,7 +349,11 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     ImGui::Text("Ready | GPU: %.*s", static_cast<int>(gpuName.size()), gpuName.data());
     ImGui::Text("FFmpeg: %.*s", static_cast<int>(ffmpegVersion.size()), ffmpegVersion.data());
     ImGui::TextWrapped("Encoder: %.*s", static_cast<int>(encoderSummary.size()), encoderSummary.data());
-    ImGui::TextDisabled("GPU recording pipeline ready; audio is the next major subsystem.");
+    if (!recoveryStatus.empty()) {
+        ImGui::TextColored(ImVec4(1.0F, 0.75F, 0.25F, 1.0F), "%.*s",
+                           static_cast<int>(recoveryStatus.size()), recoveryStatus.data());
+    }
+    ImGui::TextDisabled("GPU capture, synchronized audio, and recoverable recording are ready.");
     ImGui::End();
     return command;
 }
