@@ -13,7 +13,16 @@
     {
       "name": "ffmpeg",
       "default-features": false,
-      "features": ["avcodec", "avformat", "swresample"]
+      "features": [
+        "amf",
+        "avcodec",
+        "avformat",
+        "ffprobe",
+        "nvcodec",
+        "openh264",
+        "qsv",
+        "swresample"
+      ]
     }
   ]
 }

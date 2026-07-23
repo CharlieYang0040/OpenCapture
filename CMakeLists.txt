@@ -32,9 +32,17 @@ if(OPENCAPTURE_BUILD_APP)
 
     find_path(FFMPEG_INCLUDE_DIR libavutil/avutil.h REQUIRED)
     find_library(AVUTIL_LIBRARY avutil REQUIRED)
+    find_library(AVCODEC_LIBRARY avcodec REQUIRED)
+    find_library(AVFORMAT_LIBRARY avformat REQUIRED)
 
     add_executable(OpenCapture WIN32
         app/main.cpp
+        encoder/ffmpeg_d3d11_encoder.cpp
+        encoder/ffmpeg_encoder_registry.cpp
+        encoder/ffmpeg_muxer.cpp
+        gpu/d3d11_frame_processor.cpp
+        platform/capture_target_picker.cpp
+        platform/windows_graphics_capture.cpp
         platform/win32_d3d11_app.cpp
         ui/main_panel.cpp
     )
@@ -43,9 +51,14 @@ if(OPENCAPTURE_BUILD_APP)
         opencapture_core
         imgui::imgui
         ${AVUTIL_LIBRARY}
+        ${AVCODEC_LIBRARY}
+        ${AVFORMAT_LIBRARY}
         d3d11
+        d3dcompiler
         dxgi
         dwmapi
+        shell32
+        windowsapp
     )
     target_compile_definitions(OpenCapture PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
     if(MSVC)
@@ -53,6 +66,20 @@ if(OPENCAPTURE_BUILD_APP)
     endif()
 
     install(TARGETS OpenCapture RUNTIME DESTINATION .)
+
+    if(OPENCAPTURE_BUILD_TESTS)
+        add_executable(opencapture_encoder_probe
+            tools/encoder_probe.cpp
+            encoder/ffmpeg_encoder_registry.cpp
+        )
+        target_include_directories(opencapture_encoder_probe PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+        target_include_directories(opencapture_encoder_probe SYSTEM PRIVATE ${FFMPEG_INCLUDE_DIR})
+        target_link_libraries(opencapture_encoder_probe PRIVATE ${AVCODEC_LIBRARY} ${AVUTIL_LIBRARY} dxgi)
+        target_compile_definitions(opencapture_encoder_probe PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+        if(MSVC)
+            target_compile_options(opencapture_encoder_probe PRIVATE /W4 /permissive- /Zc:__cplusplus)
+        endif()
+    endif()
 endif()
 
 if(OPENCAPTURE_BUILD_TESTS)

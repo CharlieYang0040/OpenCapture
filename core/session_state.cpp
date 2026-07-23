@@ -4,6 +4,12 @@
 
 namespace opencapture {
 
+std::int64_t QpcDeltaToFramePts(std::int64_t qpcDelta, std::int64_t qpcFrequency,
+                                int framesPerSecond) noexcept {
+    if (qpcDelta <= 0 || qpcFrequency <= 0 || framesPerSecond <= 0) return 0;
+    return (qpcDelta * framesPerSecond + qpcFrequency / 2) / qpcFrequency;
+}
+
 SessionPhase SessionState::Phase() const noexcept {
     std::scoped_lock lock(mutex_);
     return phase_;
@@ -45,7 +51,7 @@ bool SessionState::Resume() {
 
 bool SessionState::BeginStop() {
     std::scoped_lock lock(mutex_);
-    if (phase_ != SessionPhase::Recording && phase_ != SessionPhase::Paused) return false;
+    if (phase_ != SessionPhase::Starting && phase_ != SessionPhase::Recording && phase_ != SessionPhase::Paused) return false;
     phase_ = SessionPhase::Stopping;
     return true;
 }
@@ -72,4 +78,3 @@ bool SessionState::Reset() {
 }
 
 } // namespace opencapture
-

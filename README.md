@@ -4,7 +4,7 @@
 
 OpenCapture는 Windows 10/11을 위한 네이티브 화면 캡처 애플리케이션입니다. 화면 캡처부터 색상 변환, 크기 조절, 하드웨어 인코딩까지 가능한 한 GPU 안에서 처리하여 매 프레임 전체 이미지를 CPU 메모리로 복사하지 않는 고성능 녹화 경로를 목표로 합니다.
 
-현재는 활발히 개발 중인 초기 단계입니다. C++20 프로젝트 기반, Win32/D3D11/Dear ImGui 애플리케이션 셸, FFmpeg 런타임 진단, 캡처 대상 모델, 녹화 상태 머신과 지연이 누적되지 않도록 오래된 프레임을 버리는 제한 큐가 구현되어 있습니다. 실제 화면 캡처와 녹화 버튼은 후속 마일스톤에서 연결될 예정입니다.
+현재는 활발히 개발 중인 기술 시제품 단계입니다. 창·모니터·영역을 Windows Graphics Capture로 받아 D3D11에서 자르기, 크기 조절 및 NV12 변환을 수행하고, H.264 NVENC 또는 OpenH264 폴백으로 MKV를 기록할 수 있습니다. 오디오, 스크린샷, GIF 및 안전 저장은 아직 개발 중입니다.
 
 ## 주요 목표
 
@@ -24,17 +24,24 @@ OpenCapture는 Windows 10/11을 위한 네이티브 화면 캡처 애플리케�
 - Win32 창과 D3D11 디바이스 초기화
 - Dear ImGui 사용자 인터페이스 셸
 - FFmpeg 연결 상태 및 런타임 버전 표시
-- 캡처 대상과 녹화 세션 상태 모델
+- 창, 모니터 및 DPI aware 화면 영역 선택
+- 이름이 있는 화면 영역 프리셋 저장·적용·수정·복제·삭제
+- Windows Graphics Capture 프레임 수집과 QPC 타임스탬프
+- D3D11 shader 기반 crop, scale 및 BGRA-to-NV12 변환
+- H.264 NVENC 실시간 인코딩과 MKV 저장
+- H.264 인코더 자동/수동 선택과 OpenH264 최종 폴백
+- 녹화 시작·중지와 실제 활성 인코더 상태 표시
 - drop-oldest 정책을 사용하는 제한 큐
 - 핵심 모델 단위 테스트와 Windows GitHub Actions CI
 
 아직 구현되지 않음:
 
-- 실제 화면·창·영역 프레임 수집
-- GPU 색상 변환 및 스케일링
-- 하드웨어 인코딩과 파일 저장
 - 오디오 캡처·믹싱·동기화
-- 스크린샷, 클립보드, 단축키와 트레이 기능
+- 스크린샷 저장과 디스크 없는 클립보드 캡처
+- GIF 녹화와 MP4 remux
+- 임시 파일, 복구, 일시정지 및 저장 공간 검사
+- Desktop Duplication, 전역 단축키와 트레이
+- QSV/AMF 실기 검증과 장시간 성능 시험
 
 전체 개발 순서와 성능 기준은 [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md)에서 확인할 수 있습니다.
 
@@ -161,14 +168,17 @@ vcpkg 기준 커밋은 `vcpkg.json`과 `scripts/setup.ps1`에 고정되어 있�
 OpenCapture/
 ├─ app/        프로그램 진입점과 객체 조립
 ├─ core/       캡처 대상, 세션 상태와 제한 큐
-├─ platform/   Win32 창, D3D11, DPI 등 플랫폼 코드
+├─ encoder/    FFmpeg 인코더 탐색, D3D11 인코딩과 muxing
+├─ gpu/        D3D11 crop, scale 및 색상 변환
+├─ platform/   Win32, WGC, 대상 선택과 DPI 등 플랫폼 코드
 ├─ ui/         Dear ImGui 화면과 명령 전달
 ├─ tests/      핵심 로직 자동 테스트
+├─ tools/      인코더 및 통합 스모크 진단 도구
 ├─ scripts/    새 개발 PC 설정 스크립트
 └─ .github/    GitHub Actions CI 설정
 ```
 
-향후 `capture`, `graphics`, `audio`, `encoding`, `image` 모듈이 개발 계획에 따라 추가될 예정입니다. UI 계층은 표시와 명령 전달만 담당하고, 캡처와 인코딩 로직은 독립 모듈로 유지하는 것이 기본 원칙입니다.
+향후 `audio`와 `image` 모듈을 개발 계획에 따라 추가합니다. UI 계층은 표시와 명령 전달만 담당하고, 캡처와 인코딩 로직은 독립 모듈로 유지하는 것이 기본 원칙입니다.
 
 ## 문제 해결
 

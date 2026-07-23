@@ -39,6 +39,11 @@ public:
         return queue_.size();
     }
 
+    void Clear() noexcept {
+        std::scoped_lock lock(mutex_);
+        queue_.clear();
+    }
+
     [[nodiscard]] std::size_t Capacity() const noexcept { return capacity_; }
 
 private:
@@ -48,4 +53,3 @@ private:
 };
 
 } // namespace opencapture
-

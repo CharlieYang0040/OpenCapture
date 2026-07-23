@@ -4,7 +4,7 @@
 
 OpenCapture is a native screen capture application for Windows 10 and 11. Its goal is a GPU-first recording path that keeps captured frames as D3D11 textures through processing and hardware encoding, avoiding a full-frame CPU memory round trip for every frame.
 
-The project is in active early development. The current milestone includes the C++20 foundation, a Win32/D3D11/Dear ImGui application shell, FFmpeg runtime diagnostics, capture-target and recording-session models, and a bounded drop-oldest queue. Actual capture and recording controls will be connected in later milestones.
+The project is an actively developed technical prototype. It can capture a window, monitor, or region with Windows Graphics Capture, crop, scale, and convert frames to NV12 on D3D11, and write H.264 MKV through NVENC or the OpenH264 fallback. Audio, screenshots, GIF, and safe-output workflows are still under development.
 
 ## Goals
 
@@ -24,17 +24,24 @@ Implemented:
 - Win32 window and D3D11 device initialization
 - Dear ImGui application shell
 - FFmpeg linkage and runtime-version diagnostics
-- Capture-target and recording-session state models
+- Window, monitor, and DPI-aware region selection
+- Persistent named region presets with management actions
+- Windows Graphics Capture frames with QPC timestamps
+- D3D11 shader crop, scale, and BGRA-to-NV12 conversion
+- Real-time H.264 NVENC encoding and MKV output
+- Automatic/manual H.264 selection with an OpenH264 final fallback
+- Recording start/stop controls and active-encoder status
 - Bounded queue with a drop-oldest overload policy
 - Core unit tests and Windows GitHub Actions CI
 
 Not implemented yet:
 
-- Live monitor, window, or region frame capture
-- GPU color conversion and scaling
-- Hardware encoding and output muxing
 - Audio capture, mixing, and synchronization
-- Screenshots, clipboard, hotkeys, and tray integration
+- Screenshot output and diskless clipboard capture
+- GIF recording and MP4 remux
+- Temporary output, recovery, pause, and free-space checks
+- Desktop Duplication, global hotkeys, and tray integration
+- QSV/AMF hardware validation and long-running performance tests
 
 See [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md) for the roadmap and performance acceptance criteria.
 
@@ -134,14 +141,17 @@ The vcpkg baseline is pinned in both `vcpkg.json` and `scripts/setup.ps1` for re
 OpenCapture/
 ├─ app/        Process entry point and composition
 ├─ core/       Capture targets, session state, and bounded queues
-├─ platform/   Win32, D3D11, DPI, and other platform code
+├─ encoder/    FFmpeg discovery, D3D11 encoding, and muxing
+├─ gpu/        D3D11 crop, scale, and color conversion
+├─ platform/   Win32, WGC, target selection, and DPI integration
 ├─ ui/         Dear ImGui presentation and command dispatch
 ├─ tests/      Automated core tests
+├─ tools/      Encoder and integration smoke diagnostics
 ├─ scripts/    New-machine setup automation
 └─ .github/    GitHub Actions CI
 ```
 
-Future milestones will add `capture`, `graphics`, `audio`, `encoding`, and `image` modules. UI code should remain limited to presentation and command dispatch, while capture and encoding logic stays independently testable.
+Future milestones will add the `audio` and `image` modules. UI code should remain limited to presentation and command dispatch, while capture and encoding logic stays independently testable.
 
 ## Troubleshooting
 
