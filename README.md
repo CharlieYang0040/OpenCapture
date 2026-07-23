@@ -44,6 +44,8 @@ OpenCapture는 Windows 10/11을 위한 네이티브 화면 캡처 애플리케�
 - GIF 360p·480p·720p·1080p, 6~30fps 및 64~256색 선택
 - GPU 축소와 저FPS 소스 기록, FFmpeg 2-pass palettegen/paletteuse 변환
 - 30초 및 5억 픽셀 처리 예산 기반 GIF 자동 종료와 실패 시 소스 MKV 보존
+- UI를 멈추지 않는 GIF 백그라운드 변환, 단계별 진행률과 취소
+- 취소·앱 종료 시 `.part.gif`를 제거하고 안전 소스 MKV를 유지하는 작업 수명 관리
 - 스크린샷·녹화 공용 출력 폴더와 UI 폴더 선택
 - Enter 확정 후 메인 앱을 유지하고 재실행 시 모니터 연결까지 복원하는 영역 선택
 - 결과를 명확히 구분한 클립보드·PNG·비디오·GIF 버튼
@@ -53,7 +55,7 @@ OpenCapture는 Windows 10/11을 위한 네이티브 화면 캡처 애플리케�
 아직 구현되지 않음:
 
 - 오디오 장치 선택, 개별 볼륨·음소거, Opus와 장시간 드리프트 보정
-- GIF 변환 진행률·취소와 MP4/MKV/WebM 범용 오프라인 변환
+- VP9/Opus를 포함한 MP4/MKV/WebM 범용 오프라인 재인코딩
 - Desktop Duplication, 전역 단축키와 트레이
 - QSV/AMF 실기 검증과 장시간 성능 시험
 

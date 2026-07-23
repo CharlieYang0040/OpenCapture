@@ -8,6 +8,7 @@
 #include <wrl/client.h>
 
 #include <array>
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <unordered_map>
@@ -99,6 +100,8 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
                                  CaptureTargetPicker& picker, WindowsGraphicsCapture& capture,
                                  HWND owner, ID3D11Device* device) {
     MainPanelCommand command{};
+    const bool mediaBusy = recording.mediaJobActive;
+    const bool outputBusy = recording.active || mediaBusy;
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(viewport->WorkPos);
     ImGui::SetNextWindowSize(viewport->WorkSize);
@@ -301,14 +304,14 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     ImGui::SeparatorText("Output");
     ImGui::TextWrapped("Screenshots, video recordings, and GIF files are saved in the same folder.");
     ImGui::TextWrapped("Folder: %.*s", static_cast<int>(outputDirectory.size()), outputDirectory.data());
-    if (recording.active) ImGui::BeginDisabled();
+    if (outputBusy) ImGui::BeginDisabled();
     if (ImGui::Button("Change output folder...", ImVec2(210.0F, 32.0F))) {
         command.chooseOutputDirectory = true;
     }
-    if (recording.active) {
+    if (outputBusy) {
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-            ImGui::SetTooltip("Stop recording before changing the output folder.");
+            ImGui::SetTooltip("Stop recording or wait for media conversion before changing the output folder.");
         }
     }
 
@@ -322,9 +325,9 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
             ImGui::Text("%s (%.1f MiB)", item.fileName.c_str(),
                         static_cast<double>(item.sizeBytes) / (1024.0 * 1024.0));
             ImGui::SameLine();
-            if (recording.active) ImGui::BeginDisabled();
+            if (outputBusy) ImGui::BeginDisabled();
             if (ImGui::SmallButton("Recover")) command.recoverRecordingIndex = static_cast<int>(index);
-            if (recording.active) ImGui::EndDisabled();
+            if (outputBusy) ImGui::EndDisabled();
             ImGui::PopID();
         }
     }
@@ -383,9 +386,13 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
         if (ImGui::Button(recording.gif ? "Stop and create GIF" : "Stop video recording", ImVec2(205.0F, 44.0F))) {
             command.stopRecording = true;
         }
-    } else if (ImGui::Button("Start video recording", ImVec2(205.0F, 44.0F))) {
-        command.startRecording = true;
-        if (selectedEncoder > 0) command.encoderName = encoderChoices[static_cast<std::size_t>(selectedEncoder - 1)].name;
+    } else {
+        if (mediaBusy) ImGui::BeginDisabled();
+        if (ImGui::Button("Start video recording", ImVec2(205.0F, 44.0F))) {
+            command.startRecording = true;
+            if (selectedEncoder > 0) command.encoderName = encoderChoices[static_cast<std::size_t>(selectedEncoder - 1)].name;
+        }
+        if (mediaBusy) ImGui::EndDisabled();
     }
     if (recording.active || !recording.outputPath.empty()) {
         ImGui::Text("Recorded: %llu frames | %.2f s",
@@ -395,7 +402,7 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
             ImGui::Text("Active encoder: %.*s", static_cast<int>(recording.encoderName.size()), recording.encoderName.data());
         }
     }
-    if (!recording.active && recording.canRemux) {
+    if (!recording.active && !mediaBusy && recording.canRemux) {
         if (ImGui::Button("Create MP4 copy", ImVec2(180.0F, 34.0F))) {
             command.remuxLastRecording = true;
         }
@@ -418,11 +425,11 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     ImGui::Spacing();
     ImGui::SeparatorText("GIF size controls");
     ImGui::TextWrapped("Lower resolution, FPS, and color count create much smaller GIF files. Recording stops automatically at 30 seconds or the safe pixel budget.");
-    if (recording.active) ImGui::BeginDisabled();
+    if (outputBusy) ImGui::BeginDisabled();
     ImGui::Combo("GIF FPS", &gifFpsIndex, gifFpsLabels.data(), static_cast<int>(gifFpsLabels.size()));
     ImGui::Combo("GIF resolution", &gifHeightIndex, gifHeightLabels.data(), static_cast<int>(gifHeightLabels.size()));
     ImGui::Combo("GIF colors", &gifColorIndex, gifColorLabels.data(), static_cast<int>(gifColorLabels.size()));
-    if (recording.active) ImGui::EndDisabled();
+    if (outputBusy) ImGui::EndDisabled();
     command.gifFramesPerSecond = gifFpsValues[static_cast<std::size_t>(gifFpsIndex)];
     command.gifHeight = gifHeightValues[static_cast<std::size_t>(gifHeightIndex)];
     command.gifColors = gifColorValues[static_cast<std::size_t>(gifColorIndex)];
@@ -430,12 +437,22 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
         ImGui::TextColored(ImVec4(1.0F, 0.75F, 0.25F, 1.0F),
                            "Large GIF warning: use 720p / 12 fps or lower for sharing.");
     }
-    if (!recording.active &&
+    if (!outputBusy &&
         ImGui::Button("Start GIF recording", ImVec2(205.0F, 44.0F))) {
         command.startGif = true;
     }
-    if (!recording.active && ImGui::IsItemHovered()) {
+    if (!outputBusy && ImGui::IsItemHovered()) {
         ImGui::SetTooltip("Records without audio, then creates an optimized GIF.");
+    }
+    if (mediaBusy) {
+        ImGui::ProgressBar(static_cast<float>(std::clamp(recording.mediaProgress, 0.0, 1.0)),
+                           ImVec2(-1.0F, 0.0F), "Creating GIF...");
+        if (recording.mediaCancelRequested) ImGui::BeginDisabled();
+        if (ImGui::Button(recording.mediaCancelRequested ? "Cancelling..." : "Cancel GIF conversion",
+                          ImVec2(205.0F, 36.0F))) {
+            command.cancelMediaJob = true;
+        }
+        if (recording.mediaCancelRequested) ImGui::EndDisabled();
     }
     if (!gifStatus.empty()) {
         ImGui::TextWrapped("%.*s", static_cast<int>(gifStatus.size()), gifStatus.data());

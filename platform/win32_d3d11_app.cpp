@@ -142,6 +142,8 @@ bool Win32D3D11App::Initialize(HINSTANCE instance, int showCommand) {
     recoverySmokeMode_ = std::wcsstr(GetCommandLineW(), L"--recovery-smoke") != nullptr;
     remuxSmokeMode_ = std::wcsstr(GetCommandLineW(), L"--remux-smoke") != nullptr;
     gifConvertSmokeMode_ = std::wcsstr(GetCommandLineW(), L"--gif-convert-smoke") != nullptr;
+    gifCancelSmokeMode_ = std::wcsstr(GetCommandLineW(), L"--gif-cancel-smoke") != nullptr;
+    gifConvertSmokeMode_ = gifConvertSmokeMode_ || gifCancelSmokeMode_;
     gifRecordSmokeMode_ = std::wcsstr(GetCommandLineW(), L"--gif-record-smoke") != nullptr;
     realtimeRecordSmokeMode_ = realtimeRecordSmokeMode_ || gifRecordSmokeMode_;
     nvencSmokeMode_ = nvencSmokeMode_ || recordSmokeMode_;
@@ -182,8 +184,19 @@ bool Win32D3D11App::Initialize(HINSTANCE instance, int showCommand) {
     if (gifConvertSmokeMode_) {
         const auto input = ReadEnvironmentUtf8(L"OPENCAPTURE_GIF_INPUT");
         const auto output = ReadEnvironmentUtf8(L"OPENCAPTURE_GIF_OUTPUT");
-        captureSmokeFailed_ = input.empty() || output.empty() ||
-            !gifConverter_.Convert(input, output, {128});
+        if (gifCancelSmokeMode_ && !input.empty() && !output.empty()) {
+            std::stop_source cancellation;
+            const bool converted = gifConverter_.Convert(
+                input, output, {128}, cancellation.get_token(),
+                [&](double progress) {
+                    if (progress >= 0.05) cancellation.request_stop();
+                });
+            captureSmokeFailed_ = converted ||
+                gifConverter_.LastError().find("cancelled") == std::string::npos;
+        } else {
+            captureSmokeFailed_ = input.empty() || output.empty() ||
+                !gifConverter_.Convert(input, output, {128});
+        }
         if (captureSmokeFailed_) WriteSmokeFailure(
             gifConverter_.LastError().empty()
                 ? "OPENCAPTURE_GIF_INPUT and OPENCAPTURE_GIF_OUTPUT are required."
@@ -734,6 +747,10 @@ bool Win32D3D11App::RemuxRecordingToMp4(std::string_view sourcePath) {
 }
 
 bool Win32D3D11App::ConvertRecordingToGif() {
+    if (mediaJobRunning_) {
+        gifStatus_ = "Another media conversion is already running.";
+        return false;
+    }
     const std::filesystem::path source(ToWide(recordingPath_));
     const std::filesystem::path destination(ToWide(gifOutputPath_));
     const auto temporary = destination.parent_path() /
@@ -757,32 +774,92 @@ bool Win32D3D11App::ConvertRecordingToGif() {
             : frameProcessingError_ + " The source MKV was kept.";
         return false;
     }
-    gifStatus_ = "Optimizing GIF colors...";
-    if (!gifConverter_.Convert(ToUtf8(source.c_str()), ToUtf8(temporary.c_str()), {gifColors_})) {
-        std::filesystem::remove(temporary, error);
-        frameProcessingError_ = gifConverter_.LastError() + " The source MKV was kept.";
-        gifStatus_ = frameProcessingError_;
-        return false;
-    }
-    std::filesystem::rename(temporary, destination, error);
-    if (error) {
-        std::filesystem::remove(temporary, error);
-        frameProcessingError_ = "Could not finalize the GIF name. The source MKV was kept.";
-        gifStatus_ = frameProcessingError_;
-        return false;
-    }
-    const auto gifBytes = std::filesystem::file_size(destination, error);
-    const bool sizeKnown = !error;
-    std::error_code removeError;
-    std::filesystem::remove(source, removeError);
-    std::ostringstream status;
-    status << "GIF saved: " << gifOutputPath_;
-    if (sizeKnown) status << " (" << (gifBytes / 1024) << " KiB)";
-    if (removeError) status << " The safe source MKV was also kept.";
-    gifStatus_ = status.str();
-    recordingPath_ = gifOutputPath_;
     frameProcessingError_.clear();
+    gifStatus_ = "Analyzing colors for GIF...";
+    mediaProgress_ = 0.0;
+    mediaJobFinished_ = false;
+    mediaJobRunning_ = true;
+    mediaJobDestination_ = gifOutputPath_;
+    if (mediaWorker_.joinable()) mediaWorker_.join();
+    const auto sourceUtf8 = ToUtf8(source.c_str());
+    const auto temporaryUtf8 = ToUtf8(temporary.c_str());
+    const auto destinationUtf8 = gifOutputPath_;
+    const int colors = gifColors_;
+    mediaWorker_ = std::jthread(
+        [this, source, destination, temporary, sourceUtf8, temporaryUtf8, destinationUtf8, colors]
+        (std::stop_token stopToken) {
+            bool success = gifConverter_.Convert(
+                sourceUtf8, temporaryUtf8, {colors}, stopToken,
+                [this](double value) { mediaProgress_ = value; });
+            std::string result;
+            std::error_code workerError;
+            if (success && stopToken.stop_requested()) {
+                success = false;
+                result = "GIF conversion cancelled. The source MKV was kept.";
+            }
+            if (success) {
+                std::filesystem::rename(temporary, destination, workerError);
+                if (workerError) {
+                    success = false;
+                    result = "Could not finalize the GIF name. The source MKV was kept.";
+                }
+            }
+            if (success) {
+                const auto gifBytes = std::filesystem::file_size(destination, workerError);
+                const bool sizeKnown = !workerError;
+                std::error_code removeError;
+                std::filesystem::remove(source, removeError);
+                std::ostringstream status;
+                status << "GIF saved: " << destinationUtf8;
+                if (sizeKnown) status << " (" << (gifBytes / 1024) << " KiB)";
+                if (removeError) status << " The safe source MKV was also kept.";
+                result = status.str();
+            } else {
+                std::filesystem::remove(temporary, workerError);
+                if (result.empty()) {
+                    result = gifConverter_.LastError() + " The source MKV was kept.";
+                }
+            }
+            {
+                std::lock_guard lock(mediaResultMutex_);
+                mediaJobSucceeded_ = success;
+                mediaJobResult_ = std::move(result);
+            }
+            mediaJobRunning_ = false;
+            mediaJobFinished_ = true;
+        });
     return true;
+}
+
+void Win32D3D11App::PollMediaJob() {
+    if (!mediaJobFinished_.exchange(false)) return;
+    if (mediaWorker_.joinable()) mediaWorker_.join();
+    bool success{};
+    std::string result;
+    {
+        std::lock_guard lock(mediaResultMutex_);
+        success = mediaJobSucceeded_;
+        result = mediaJobResult_;
+    }
+    gifStatus_ = result;
+    if (success) {
+        recordingPath_ = mediaJobDestination_;
+        frameProcessingError_.clear();
+    } else {
+        frameProcessingError_ = result;
+    }
+    if (gifRecordSmokeMode_) {
+        captureSmokeFailed_ = !success;
+        if (!success) WriteSmokeFailure(result);
+        realtimeRecordSmokeComplete_ = true;
+        PostMessageW(window_, WM_CLOSE, 0, 0);
+    }
+}
+
+void Win32D3D11App::CancelMediaJob() {
+    if (!mediaJobRunning_ || !mediaWorker_.joinable()) return;
+    mediaWorker_.request_stop();
+    gifStatus_ = "Cancelling GIF conversion...";
 }
 
 std::wstring Win32D3D11App::MakeScreenshotPath() const {
@@ -1465,6 +1542,7 @@ void Win32D3D11App::ProcessCaptureFrames() {
 }
 
 void Win32D3D11App::Render() {
+    PollMediaJob();
     ProcessCaptureFrames();
     PumpRecordingClock();
     PumpRecordingAudio();
@@ -1482,7 +1560,9 @@ void Win32D3D11App::Render() {
     const RecordingUiState recordingUi{
         RecordingActive(), recordingPhase == SessionPhase::Starting,
         recordingPhase == SessionPhase::Paused, RecordingActive() && recordingGif_,
-        canRemux, recordingPath_, recordingError,
+        canRemux, mediaJobRunning_.load(),
+        mediaWorker_.joinable() && mediaWorker_.get_stop_token().stop_requested(),
+        mediaProgress_.load(), recordingPath_, recordingError,
         activeEncoderName_, recordingFrameCount_, recordingElapsedSeconds_};
     std::vector<EncoderUiChoice> encoderChoices;
     for (const auto& capability : encoderRegistry_.Capabilities()) {
@@ -1495,15 +1575,15 @@ void Win32D3D11App::Render() {
                                          outputDirectoryUtf8_,
                                          recoverableRecordings_,
                                          recordingUi, targetPicker_, capture_, window_, device_.Get());
-    if (command.chooseOutputDirectory && !RecordingActive()) ChooseOutputDirectory();
+    if (command.chooseOutputDirectory && !RecordingActive() && !mediaJobRunning_) ChooseOutputDirectory();
     if (command.recoverRecordingIndex >= 0) {
         RecoverRecording(static_cast<std::size_t>(command.recoverRecordingIndex));
     }
-    if (command.startRecording) {
+    if (command.startRecording && !mediaJobRunning_) {
         StartRecording(command.framesPerSecond, command.quality, command.encoderName,
                        command.systemAudio, command.microphone, command.remuxToMp4);
     }
-    if (command.startGif) {
+    if (command.startGif && !mediaJobRunning_) {
         StartRecording(command.gifFramesPerSecond, 0, command.encoderName,
                        false, false, false, true, command.gifHeight, command.gifColors);
     }
@@ -1511,6 +1591,7 @@ void Win32D3D11App::Render() {
     if (command.pauseRecording) PauseRecording();
     if (command.resumeRecording) ResumeRecording();
     if (command.remuxLastRecording) RemuxRecordingToMp4(recordingPath_);
+    if (command.cancelMediaJob) CancelMediaJob();
     if (command.copyScreenshot) StartScreenshot(ScreenshotDestination::Clipboard);
     if (command.saveScreenshot) StartScreenshot(ScreenshotDestination::File);
     if (command.saveAndCopyScreenshot) StartScreenshot(ScreenshotDestination::FileAndClipboard);
@@ -1566,9 +1647,9 @@ void Win32D3D11App::Render() {
                 WriteSmokeFailure(recordingState_.Error());
             } else {
                 StopRecording();
-                realtimeRecordSmokeComplete_ = true;
+                realtimeRecordSmokeComplete_ = !gifRecordSmokeMode_;
             }
-            PostMessageW(window_, WM_CLOSE, 0, 0);
+            if (!gifRecordSmokeMode_) PostMessageW(window_, WM_CLOSE, 0, 0);
         }
     }
 
@@ -1586,6 +1667,8 @@ void Win32D3D11App::Render() {
 
 void Win32D3D11App::Shutdown() {
     StopRecording();
+    CancelMediaJob();
+    if (mediaWorker_.joinable()) mediaWorker_.join();
     capture_.Stop();
     muxer_.Close();
     videoEncoder_.Close();

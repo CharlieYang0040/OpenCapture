@@ -19,8 +19,11 @@
 #include "ui/main_panel.h"
 
 #include <cstdint>
+#include <atomic>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace opencapture {
@@ -67,6 +70,8 @@ private:
     bool RecoverRecording(std::size_t index);
     bool RemuxRecordingToMp4(std::string_view sourcePath);
     bool ConvertRecordingToGif();
+    void PollMediaJob();
+    void CancelMediaJob();
     [[nodiscard]] std::int64_t EffectiveRecordingDelta(std::int64_t qpc) const noexcept;
     [[nodiscard]] std::wstring MakeScreenshotPath() const;
     bool StartScreenshot(ScreenshotDestination destination);
@@ -117,6 +122,14 @@ private:
     double gifDurationLimit_{30.0};
     std::string gifOutputPath_;
     std::string gifStatus_;
+    std::jthread mediaWorker_;
+    std::atomic<double> mediaProgress_{};
+    std::atomic<bool> mediaJobRunning_{};
+    std::atomic<bool> mediaJobFinished_{};
+    std::mutex mediaResultMutex_;
+    bool mediaJobSucceeded_{};
+    std::string mediaJobResult_;
+    std::string mediaJobDestination_;
     std::uint64_t encodedPacketCount_{};
     std::string recordSmokePath_;
     SessionState recordingState_;
@@ -150,6 +163,7 @@ private:
     bool recoverySmokeMode_{};
     bool remuxSmokeMode_{};
     bool gifConvertSmokeMode_{};
+    bool gifCancelSmokeMode_{};
     bool gifRecordSmokeMode_{};
     bool realtimeRecordSmokeComplete_{};
     bool pauseSmokeStarted_{};

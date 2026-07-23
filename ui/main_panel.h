@@ -19,6 +19,9 @@ struct RecordingUiState {
     bool paused{};
     bool gif{};
     bool canRemux{};
+    bool mediaJobActive{};
+    bool mediaCancelRequested{};
+    double mediaProgress{};
     std::string_view outputPath;
     std::string_view error;
     std::string_view encoderName;
@@ -49,6 +52,7 @@ struct MainPanelCommand {
     bool remuxLastRecording{};
     bool remuxToMp4{};
     bool startGif{};
+    bool cancelMediaJob{};
     bool copyScreenshot{};
     bool saveScreenshot{};
     bool saveAndCopyScreenshot{};

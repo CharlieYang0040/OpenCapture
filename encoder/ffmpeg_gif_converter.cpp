@@ -74,7 +74,8 @@ struct CodecDeleter {
 };
 
 bool FeedDecoded(InputVideo& input, AVFilterContext* source, AVFilterContext* sink,
-                 const std::function<bool(AVFrame*)>& consume, std::string& error) {
+                 const std::function<bool(AVFrame*)>& consume, std::string& error,
+                 std::stop_token stopToken, const GifProgressCallback& progress) {
     std::unique_ptr<AVPacket, PacketDeleter> packet(av_packet_alloc());
     std::unique_ptr<AVFrame, FrameDeleter> decoded(av_frame_alloc());
     std::unique_ptr<AVFrame, FrameDeleter> filtered(av_frame_alloc());
@@ -107,6 +108,20 @@ bool FeedDecoded(InputVideo& input, AVFilterContext* source, AVFilterContext* si
 
     int result{};
     while ((result = av_read_frame(input.format, packet.get())) >= 0) {
+        if (stopToken.stop_requested()) {
+            error = "GIF conversion cancelled.";
+            return false;
+        }
+        if (packet->stream_index == input.streamIndex && progress) {
+            const auto* stream = input.format->streams[input.streamIndex];
+            const std::int64_t duration = stream->duration > 0
+                ? stream->duration
+                : av_rescale_q(input.format->duration, AV_TIME_BASE_Q, stream->time_base);
+            const std::int64_t timestamp = packet->pts != AV_NOPTS_VALUE ? packet->pts : packet->dts;
+            if (duration > 0 && timestamp != AV_NOPTS_VALUE) {
+                progress(std::clamp(static_cast<double>(timestamp) / duration, 0.0, 1.0));
+            }
+        }
         if (packet->stream_index == input.streamIndex && !decode(packet.get())) return false;
         av_packet_unref(packet.get());
     }
@@ -137,8 +152,10 @@ AVFilterContext* AddBuffer(AVFilterGraph* graph, const char* name, int width, in
 } // namespace
 
 bool FFmpegGifConverter::Convert(const std::string& inputPath, const std::string& outputPath,
-                                 GifConversionOptions options) {
+                                 GifConversionOptions options, std::stop_token stopToken,
+                                 GifProgressCallback progress) {
     lastError_.clear();
+    if (progress) progress(0.0);
     InputVideo input;
     if (!input.Open(inputPath, lastError_)) return false;
     const auto* inputStream = input.format->streams[input.streamIndex];
@@ -169,7 +186,9 @@ bool FFmpegGifConverter::Convert(const std::string& inputPath, const std::string
     if (!FeedDecoded(input, paletteSource, paletteSink, [&](AVFrame* frame) {
             av_frame_unref(palette.get());
             return av_frame_ref(palette.get(), frame) >= 0;
-        }, lastError_) || !palette->data[0]) {
+        }, lastError_, stopToken, [&](double value) {
+            if (progress) progress(value * 0.45);
+        }) || !palette->data[0]) {
         if (lastError_.empty()) lastError_ = "GIF palette generation produced no palette.";
         return false;
     }
@@ -235,11 +254,15 @@ bool FFmpegGifConverter::Convert(const std::string& inputPath, const std::string
         lastError_ = "GIF encoding failed: " + ErrorText(code);
         return false;
     };
-    if (!encoded || !FeedDecoded(input, videoSource, sink, encode, lastError_) ||
+    if (!encoded || !FeedDecoded(input, videoSource, sink, encode, lastError_, stopToken,
+        [&](double value) {
+            if (progress) progress(0.45 + value * 0.50);
+        }) ||
         !encode(nullptr) || av_write_trailer(output.get()) < 0) {
         if (lastError_.empty()) lastError_ = "Could not finalize the GIF.";
         return false;
     }
+    if (progress) progress(1.0);
     return true;
 }
 

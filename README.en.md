@@ -44,6 +44,8 @@ Implemented:
 - Selectable GIF output at 360p, 480p, 720p, or 1080p; 6-30 fps; and 64-256 colors
 - GPU-scaled low-FPS source recording and FFmpeg two-pass palettegen/paletteuse conversion
 - Automatic GIF stop at 30 seconds or a 500-million-pixel processing budget, with source MKV recovery on failure
+- Non-blocking background GIF conversion with staged progress and cancellation
+- Media-job lifetime handling that removes `.part.gif` while retaining the safe source MKV on cancellation or shutdown
 - One configurable output folder shared by screenshots and recordings
 - Region confirmation that returns to the main app and restores its monitor after restart
 - Result-oriented screenshot, video, and GIF controls
@@ -53,7 +55,7 @@ Implemented:
 Not implemented yet:
 
 - Audio device selection, per-source volume/mute, Opus, and long-run drift correction
-- GIF conversion progress/cancellation and general MP4/MKV/WebM offline conversion
+- General MP4/MKV/WebM offline transcoding with VP9/Opus support
 - Desktop Duplication, global hotkeys, and tray integration
 - QSV/AMF hardware validation and long-running performance tests
 
