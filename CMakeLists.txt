@@ -27,6 +27,16 @@ if(MSVC)
     target_compile_options(opencapture_core PRIVATE /W4 /permissive- /Zc:__cplusplus)
 endif()
 
+add_library(opencapture_audio STATIC
+    audio/wasapi_capture.cpp
+)
+target_include_directories(opencapture_audio PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(opencapture_audio PUBLIC opencapture_core ole32)
+target_compile_definitions(opencapture_audio PUBLIC UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+if(MSVC)
+    target_compile_options(opencapture_audio PRIVATE /W4 /permissive- /Zc:__cplusplus)
+endif()
+
 if(OPENCAPTURE_BUILD_APP)
     find_package(imgui CONFIG REQUIRED)
 
@@ -50,6 +60,7 @@ if(OPENCAPTURE_BUILD_APP)
     target_include_directories(OpenCapture PRIVATE ${FFMPEG_INCLUDE_DIR})
     target_link_libraries(OpenCapture PRIVATE
         opencapture_core
+        opencapture_audio
         imgui::imgui
         ${AVUTIL_LIBRARY}
         ${AVCODEC_LIBRARY}
@@ -80,6 +91,15 @@ if(OPENCAPTURE_BUILD_APP)
         target_compile_definitions(opencapture_encoder_probe PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
         if(MSVC)
             target_compile_options(opencapture_encoder_probe PRIVATE /W4 /permissive- /Zc:__cplusplus)
+        endif()
+
+        add_executable(opencapture_wasapi_probe
+            tools/wasapi_probe.cpp
+        )
+        target_link_libraries(opencapture_wasapi_probe PRIVATE opencapture_audio)
+        target_compile_definitions(opencapture_wasapi_probe PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+        if(MSVC)
+            target_compile_options(opencapture_wasapi_probe PRIVATE /W4 /permissive- /Zc:__cplusplus)
         endif()
     endif()
 endif()

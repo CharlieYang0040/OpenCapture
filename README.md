@@ -33,12 +33,13 @@ OpenCapture는 Windows 10/11을 위한 네이티브 화면 캡처 애플리케�
 - 녹화 시작·중지와 실제 활성 인코더 상태 표시
 - 선택 대상 PNG 저장, 클립보드 전용 복사 및 저장 후 복사
 - 임시 파일 없이 Windows `CF_DIBV5`로 전달하는 클립보드 경로
+- event-driven WASAPI 시스템 loopback·마이크 캡처 기반과 진단 도구
 - drop-oldest 정책을 사용하는 제한 큐
 - 핵심 모델 단위 테스트와 Windows GitHub Actions CI
 
 아직 구현되지 않음:
 
-- 오디오 캡처·믹싱·동기화
+- 오디오 48kHz 변환·믹싱·인코딩·영상 파일 동기화
 - GIF 녹화와 MP4 remux
 - 임시 파일, 복구, 일시정지 및 저장 공간 검사
 - Desktop Duplication, 전역 단축키와 트레이
@@ -167,6 +168,7 @@ vcpkg 기준 커밋은 `vcpkg.json`과 `scripts/setup.ps1`에 고정되어 있�
 
 ```text
 OpenCapture/
+├─ audio/      WASAPI 시스템·마이크 캡처와 오디오 파이프라인
 ├─ app/        프로그램 진입점과 객체 조립
 ├─ core/       캡처 대상, 세션 상태와 제한 큐
 ├─ encoder/    FFmpeg 인코더 탐색, D3D11 인코딩과 muxing
@@ -180,7 +182,7 @@ OpenCapture/
 └─ .github/    GitHub Actions CI 설정
 ```
 
-향후 `audio` 모듈을 개발 계획에 따라 추가합니다. UI 계층은 표시와 명령 전달만 담당하고, 캡처·이미지·인코딩 로직은 독립 모듈로 유지하는 것이 기본 원칙입니다.
+다음 오디오 마일스톤에서는 현재 WASAPI 캡처 기반에 48kHz 변환, 믹서, AAC/Opus 및 muxer 동기화를 연결합니다. UI 계층은 표시와 명령 전달만 담당하고, 캡처·이미지·인코딩 로직은 독립 모듈로 유지하는 것이 기본 원칙입니다.
 
 ## 문제 해결
 

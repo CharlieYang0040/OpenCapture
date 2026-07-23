@@ -33,12 +33,13 @@ Implemented:
 - Recording start/stop controls and active-encoder status
 - PNG output, clipboard-only capture, and combined save-and-copy
 - Diskless Windows clipboard transfer through `CF_DIBV5`
+- Event-driven WASAPI loopback/microphone capture foundation and probe
 - Bounded queue with a drop-oldest overload policy
 - Core unit tests and Windows GitHub Actions CI
 
 Not implemented yet:
 
-- Audio capture, mixing, and synchronization
+- Audio conversion, mixing, encoding, and synchronized muxing
 - GIF recording and MP4 remux
 - Temporary output, recovery, pause, and free-space checks
 - Desktop Duplication, global hotkeys, and tray integration
@@ -140,6 +141,7 @@ The vcpkg baseline is pinned in both `vcpkg.json` and `scripts/setup.ps1` for re
 
 ```text
 OpenCapture/
+├─ audio/      WASAPI system/microphone capture and audio pipeline
 ├─ app/        Process entry point and composition
 ├─ core/       Capture targets, session state, and bounded queues
 ├─ encoder/    FFmpeg discovery, D3D11 encoding, and muxing
@@ -153,7 +155,7 @@ OpenCapture/
 └─ .github/    GitHub Actions CI
 ```
 
-Future milestones will add the `audio` module. UI code should remain limited to presentation and command dispatch, while capture, image, and encoding logic stays independently testable.
+The next audio milestone will connect 48 kHz conversion, mixing, AAC/Opus, and synchronized muxing to the existing WASAPI capture foundation. UI code should remain limited to presentation and command dispatch, while capture, image, and encoding logic stays independently testable.
 
 ## Troubleshooting
 
