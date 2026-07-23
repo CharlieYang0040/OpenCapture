@@ -7,7 +7,9 @@
 #include <imgui_impl_win32.h>
 
 extern "C" {
+#include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
+#include <libavutil/error.h>
 }
 
 #include <array>
@@ -79,6 +81,12 @@ std::wstring ToWide(std::string_view text) {
     return result;
 }
 
+std::string FFmpegError(int result) {
+    std::array<char, AV_ERROR_MAX_STRING_SIZE> text{};
+    av_strerror(result, text.data(), text.size());
+    return text.data();
+}
+
 std::filesystem::path OutputSettingsPath() {
     PWSTR localAppData{};
     if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_CREATE, nullptr, &localAppData))) return {};
@@ -117,6 +125,7 @@ bool Win32D3D11App::Initialize(HINSTANCE instance, int showCommand) {
     avMuxSmokeMode_ = std::wcsstr(GetCommandLineW(), L"--av-mux-smoke") != nullptr;
     encoderFallbackSmokeMode_ = encoderFallbackSmokeMode_ || avMuxSmokeMode_;
     screenshotSmokeMode_ = std::wcsstr(GetCommandLineW(), L"--screenshot-smoke") != nullptr;
+    recoverySmokeMode_ = std::wcsstr(GetCommandLineW(), L"--recovery-smoke") != nullptr;
     nvencSmokeMode_ = nvencSmokeMode_ || recordSmokeMode_;
     if (recordSmokeMode_) recordSmokePath_ = ReadEnvironmentUtf8(L"OPENCAPTURE_RECORD_SMOKE");
     gpuNv12SmokeMode_ = gpuNv12SmokeMode_ || nvencSmokeMode_;
@@ -152,7 +161,12 @@ bool Win32D3D11App::Initialize(HINSTANCE instance, int showCommand) {
     initialized_ = true;
     ShowWindow(window_, showCommand);
     UpdateWindow(window_);
-    if (screenshotSmokeMode_) {
+    if (recoverySmokeMode_) {
+        captureSmokeFailed_ = recoverableRecordings_.empty() || !RecoverRecording(0);
+        if (captureSmokeFailed_) WriteSmokeFailure(
+            frameProcessingError_.empty() ? "No recoverable recording was found." : frameProcessingError_);
+        PostMessageW(window_, WM_CLOSE, 0, 0);
+    } else if (screenshotSmokeMode_) {
         captureSmokeFailed_ = !RunScreenshotSmoke();
         if (captureSmokeFailed_) WriteSmokeFailure(frameProcessingError_);
         PostMessageW(window_, WM_CLOSE, 0, 0);
@@ -448,20 +462,111 @@ bool Win32D3D11App::ChooseOutputDirectory() {
 
 void Win32D3D11App::ScanRecoverableRecordings() {
     recoveryStatus_.clear();
+    recoverableRecordings_.clear();
     const std::filesystem::path directory(outputDirectory_);
     std::error_code error;
     if (!std::filesystem::exists(directory, error) || error) return;
-    std::size_t count{};
     for (std::filesystem::directory_iterator iterator(directory, error), end; !error && iterator != end;
          iterator.increment(error)) {
         if (iterator->is_regular_file(error) && iterator->path().filename().wstring().ends_with(L".part.mkv")) {
-            ++count;
+            const auto size = iterator->file_size(error);
+            if (!error) {
+                recoverableRecordings_.push_back({
+                    ToUtf8(iterator->path().c_str()),
+                    ToUtf8(iterator->path().filename().c_str()),
+                    static_cast<std::uint64_t>(size)});
+            }
         }
     }
-    if (count > 0) {
-        recoveryStatus_ = std::to_string(count) +
+    std::sort(recoverableRecordings_.begin(), recoverableRecordings_.end(),
+              [](const auto& left, const auto& right) { return left.fileName < right.fileName; });
+    if (!recoverableRecordings_.empty()) {
+        recoveryStatus_ = std::to_string(recoverableRecordings_.size()) +
             " recoverable .part.mkv recording(s) found in the output folder.";
     }
+}
+
+bool Win32D3D11App::RecoverRecording(std::size_t index) {
+    if (RecordingActive() || index >= recoverableRecordings_.size()) {
+        frameProcessingError_ = RecordingActive()
+            ? "Stop recording before recovering an incomplete file."
+            : "The selected recovery file no longer exists.";
+        return false;
+    }
+    const std::filesystem::path source(ToWide(recoverableRecordings_[index].path));
+    const std::wstring fileName = source.filename().wstring();
+    constexpr std::wstring_view partSuffix = L".part.mkv";
+    std::error_code error;
+    if (!fileName.ends_with(partSuffix) || !std::filesystem::is_regular_file(source, error) || error) {
+        frameProcessingError_ = "The selected recovery file is invalid or no longer exists.";
+        ScanRecoverableRecordings();
+        return false;
+    }
+
+    AVFormatContext* input{};
+    int result = avformat_open_input(&input, recoverableRecordings_[index].path.c_str(), nullptr, nullptr);
+    if (result < 0) {
+        frameProcessingError_ = "Recovery validation failed: " + FFmpegError(result) +
+                                ". The .part.mkv file was kept.";
+        return false;
+    }
+    result = avformat_find_stream_info(input, nullptr);
+    bool hasVideo = false;
+    if (result >= 0) {
+        for (unsigned int stream = 0; stream < input->nb_streams; ++stream) {
+            if (input->streams[stream]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+                hasVideo = true;
+                break;
+            }
+        }
+    }
+    avformat_close_input(&input);
+    if (result < 0 || !hasVideo) {
+        frameProcessingError_ = result < 0
+            ? "Recovery stream validation failed: " + FFmpegError(result) + ". The .part.mkv file was kept."
+            : "Recovery requires a readable video stream. The .part.mkv file was kept.";
+        return false;
+    }
+
+    const std::wstring baseName = fileName.substr(0, fileName.size() - partSuffix.size());
+    std::filesystem::path destination = source.parent_path() / (baseName + L".mkv");
+    const bool destinationExists = std::filesystem::exists(destination, error);
+    if (error) {
+        frameProcessingError_ = "Could not inspect the final recording name. The .part.mkv file was kept.";
+        return false;
+    }
+    if (destinationExists) {
+        bool available = false;
+        for (int suffix = 1; suffix < 1000; ++suffix) {
+            const auto candidate = source.parent_path() /
+                (baseName + L"_" + std::to_wstring(suffix) + L".mkv");
+            const bool candidateExists = std::filesystem::exists(candidate, error);
+            if (error) {
+                frameProcessingError_ = "Could not inspect an alternate recording name. The .part.mkv file was kept.";
+                return false;
+            }
+            if (!candidateExists) {
+                destination = candidate;
+                available = true;
+                break;
+            }
+        }
+        if (!available) {
+            frameProcessingError_ = "Could not find an available final name. The .part.mkv file was kept.";
+            return false;
+        }
+    }
+    std::filesystem::rename(source, destination, error);
+    if (error) {
+        frameProcessingError_ = "Could not finalize the recovered recording: " + error.message() +
+                                ". The .part.mkv file was kept.";
+        return false;
+    }
+    const auto recoveredPath = ToUtf8(destination.c_str());
+    frameProcessingError_.clear();
+    ScanRecoverableRecordings();
+    recoveryStatus_ = "Recovered recording: " + recoveredPath;
+    return true;
 }
 
 std::wstring Win32D3D11App::MakeScreenshotPath() const {
@@ -1057,8 +1162,12 @@ void Win32D3D11App::Render() {
     }
     const auto command = MainPanel::Draw(gpuName_, ffmpegVersion_, encoderSummary_, encoderChoices, frameProcessingError_,
                                          screenshotStatus_, audioStatus_, recoveryStatus_, outputDirectoryUtf8_,
+                                         recoverableRecordings_,
                                          recordingUi, targetPicker_, capture_, window_, device_.Get());
     if (command.chooseOutputDirectory && !RecordingActive()) ChooseOutputDirectory();
+    if (command.recoverRecordingIndex >= 0) {
+        RecoverRecording(static_cast<std::size_t>(command.recoverRecordingIndex));
+    }
     if (command.startRecording) {
         StartRecording(command.framesPerSecond, command.quality, command.encoderName,
                        command.systemAudio, command.microphone);

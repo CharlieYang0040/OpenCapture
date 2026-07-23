@@ -15,10 +15,12 @@
 #include "core/session_state.h"
 #include "platform/capture_target_picker.h"
 #include "platform/windows_graphics_capture.h"
+#include "ui/main_panel.h"
 
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace opencapture {
 
@@ -58,6 +60,7 @@ private:
     bool ChooseOutputDirectory();
     bool SaveOutputDirectory() const;
     void ScanRecoverableRecordings();
+    bool RecoverRecording(std::size_t index);
     [[nodiscard]] std::wstring MakeScreenshotPath() const;
     bool StartScreenshot(ScreenshotDestination destination);
     bool RunNvencSmoke(const ProcessedFrame& frame);
@@ -83,6 +86,7 @@ private:
     std::string screenshotStatus_;
     std::string audioStatus_;
     std::string recoveryStatus_;
+    std::vector<RecoverableRecordingUiItem> recoverableRecordings_;
     std::wstring outputDirectory_;
     std::string outputDirectoryUtf8_;
     std::optional<ScreenshotDestination> pendingScreenshot_;
@@ -123,6 +127,7 @@ private:
     bool encoderFallbackSmokeMode_{};
     bool avMuxSmokeMode_{};
     bool screenshotSmokeMode_{};
+    bool recoverySmokeMode_{};
     bool realtimeRecordSmokeComplete_{};
     bool captureSmokeFailed_{};
     bool initialized_{};

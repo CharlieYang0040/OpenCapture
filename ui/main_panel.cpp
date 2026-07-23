@@ -92,6 +92,7 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
                                  std::string_view audioStatus,
                                  std::string_view recoveryStatus,
                                  std::string_view outputDirectory,
+                                 const std::vector<RecoverableRecordingUiItem>& recoverableRecordings,
                                  const RecordingUiState& recording,
                                  CaptureTargetPicker& picker, WindowsGraphicsCapture& capture,
                                  HWND owner, ID3D11Device* device) {
@@ -305,6 +306,23 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
             ImGui::SetTooltip("Stop recording before changing the output folder.");
+        }
+    }
+
+    if (!recoverableRecordings.empty()) {
+        ImGui::Spacing();
+        ImGui::SeparatorText("Recording recovery");
+        ImGui::TextWrapped("Validate an incomplete MKV and finalize it without overwriting an existing recording.");
+        for (std::size_t index = 0; index < recoverableRecordings.size(); ++index) {
+            const auto& item = recoverableRecordings[index];
+            ImGui::PushID(static_cast<int>(index));
+            ImGui::Text("%s (%.1f MiB)", item.fileName.c_str(),
+                        static_cast<double>(item.sizeBytes) / (1024.0 * 1024.0));
+            ImGui::SameLine();
+            if (recording.active) ImGui::BeginDisabled();
+            if (ImGui::SmallButton("Recover")) command.recoverRecordingIndex = static_cast<int>(index);
+            if (recording.active) ImGui::EndDisabled();
+            ImGui::PopID();
         }
     }
 
