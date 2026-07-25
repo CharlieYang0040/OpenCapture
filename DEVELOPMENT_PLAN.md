@@ -705,6 +705,10 @@ OpenCapture/
 - 대기 파란색, 캡처·녹화 노란색, 일시정지 주황색, 오류 빨간색 상태를 연결했으며
   스크린샷 완료 표시는 400ms 유지한다.
 - `WDA_EXCLUDEFROMCAPTURE` 적용 성공과 `0x11` 표시 affinity를 실제 실행에서 확인했다.
+- 일부 Windows 합성 환경에서 `WDA_EXCLUDEFROMCAPTURE` 창이 화면에서도 보이지 않는
+  현상을 확인해, 영역과 창 테두리는 캡처 사각형 바깥에 배치하고 표시 affinity를
+  `WDA_NONE`으로 유지한다. 영역은 GPU crop 밖이고 창 캡처는 별도 창을 포함하지 않으므로
+  결과 영상에는 들어가지 않는다. 모니터 전체 대상만 캡처 중 조건부 제외를 사용한다.
 - 창 경계는 최대 20Hz로 DWM 확장 프레임을 추적하고 최소화·숨김·cloaked 상태에서는
   테두리를 숨긴다. 영역과 모니터는 대상이 바뀔 때만 위치를 다시 계산한다.
 - Windows borderless 권한을 비동기로 요청하고 허용되면 `IsBorderRequired(false)`를

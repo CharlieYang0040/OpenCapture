@@ -64,9 +64,7 @@ bool CaptureTargetOverlay::Initialize(HINSTANCE instance) {
             Shutdown();
             return false;
         }
-        captureExclusionAvailable_ =
-            SetWindowDisplayAffinity(window, WDA_EXCLUDEFROMCAPTURE) != FALSE &&
-            captureExclusionAvailable_;
+        SetWindowDisplayAffinity(window, WDA_NONE);
     }
     if (!captureExclusionAvailable_) {
         lastError_ = "The capture target border could not be excluded from captured output.";
@@ -80,6 +78,11 @@ void CaptureTargetOverlay::Update(const CaptureTarget& target, CaptureOverlaySta
     target_ = target;
     const bool stateChanged = state_ != state;
     state_ = state;
+    const bool monitorCaptureActive =
+        target.type == CaptureTargetType::Monitor &&
+        (state == CaptureOverlayState::Capturing ||
+         state == CaptureOverlayState::Paused);
+    UpdateDisplayAffinity(monitorCaptureActive);
     const ULONGLONG now = GetTickCount64();
     const bool flashExpired = screenshotFlashUntil_ != 0 &&
                               now >= screenshotFlashUntil_;
@@ -110,20 +113,35 @@ void CaptureTargetOverlay::Update(const CaptureTarget& target, CaptureOverlaySta
     const bool moved = !SameRect(bounds_, resolved);
     bounds_ = resolved;
     if (moved || !visible_) {
-        const LONG verticalHeight =
-            std::max<LONG>(1, bounds_.bottom - bounds_.top - 2 * kBorderThickness);
-        const std::array<RECT, 4> borderRects{{
-            {bounds_.left, bounds_.top, bounds_.right,
-             bounds_.top + kBorderThickness},
-            {bounds_.left, bounds_.bottom - kBorderThickness,
-             bounds_.right, bounds_.bottom},
-            {bounds_.left, bounds_.top + kBorderThickness,
-             bounds_.left + kBorderThickness,
-             bounds_.top + kBorderThickness + verticalHeight},
-            {bounds_.right - kBorderThickness,
-             bounds_.top + kBorderThickness, bounds_.right,
-             bounds_.top + kBorderThickness + verticalHeight},
-        }};
+        std::array<RECT, 4> borderRects{};
+        if (target.type == CaptureTargetType::Monitor) {
+            const LONG verticalHeight =
+                std::max<LONG>(1, bounds_.bottom - bounds_.top -
+                                  2 * kBorderThickness);
+            borderRects = {{
+                {bounds_.left, bounds_.top, bounds_.right,
+                 bounds_.top + kBorderThickness},
+                {bounds_.left, bounds_.bottom - kBorderThickness,
+                 bounds_.right, bounds_.bottom},
+                {bounds_.left, bounds_.top + kBorderThickness,
+                 bounds_.left + kBorderThickness,
+                 bounds_.top + kBorderThickness + verticalHeight},
+                {bounds_.right - kBorderThickness,
+                 bounds_.top + kBorderThickness, bounds_.right,
+                 bounds_.top + kBorderThickness + verticalHeight},
+            }};
+        } else {
+            borderRects = {{
+                {bounds_.left, bounds_.top - kBorderThickness,
+                 bounds_.right, bounds_.top},
+                {bounds_.left, bounds_.bottom,
+                 bounds_.right, bounds_.bottom + kBorderThickness},
+                {bounds_.left - kBorderThickness, bounds_.top,
+                 bounds_.left, bounds_.bottom},
+                {bounds_.right, bounds_.top,
+                 bounds_.right + kBorderThickness, bounds_.bottom},
+            }};
+        }
         for (std::size_t index = 0; index < windows_.size(); ++index) {
             const auto& rectangle = borderRects[index];
             SetWindowPos(windows_[index], HWND_TOPMOST,
@@ -219,6 +237,29 @@ COLORREF CaptureTargetOverlay::CurrentColor() const noexcept {
     case CaptureOverlayState::Idle:
     default:
         return RGB(45, 145, 255);
+    }
+}
+
+void CaptureTargetOverlay::UpdateDisplayAffinity(bool excludeFromCapture) {
+    if (excludedFromCapture_ == excludeFromCapture) return;
+#ifndef WDA_EXCLUDEFROMCAPTURE
+#define WDA_EXCLUDEFROMCAPTURE 0x00000011
+#endif
+    const DWORD affinity = excludeFromCapture ? WDA_EXCLUDEFROMCAPTURE : WDA_NONE;
+    bool succeeded = true;
+    for (const auto window : windows_) {
+        if (window) {
+            succeeded = SetWindowDisplayAffinity(window, affinity) != FALSE &&
+                        succeeded;
+        }
+    }
+    captureExclusionAvailable_ = succeeded;
+    if (succeeded) {
+        excludedFromCapture_ = excludeFromCapture;
+    } else {
+        lastError_ = excludeFromCapture
+            ? "The monitor border could not be excluded from captured output."
+            : "The target border display mode could not be restored.";
     }
 }
 

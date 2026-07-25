@@ -40,6 +40,7 @@ private:
     static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam);
     [[nodiscard]] bool ResolveTargetRect(const CaptureTarget& target, RECT& bounds) const;
     [[nodiscard]] COLORREF CurrentColor() const noexcept;
+    void UpdateDisplayAffinity(bool excludeFromCapture);
     void Paint(HWND window);
 
     HINSTANCE instance_{};
@@ -50,6 +51,7 @@ private:
     ULONGLONG lastGeometryUpdate_{};
     ULONGLONG screenshotFlashUntil_{};
     bool captureExclusionAvailable_{};
+    bool excludedFromCapture_{};
     bool visible_{};
     std::string lastError_;
 };
