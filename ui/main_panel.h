@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -42,6 +43,13 @@ struct RecoverableRecordingUiItem {
     std::uint64_t sizeBytes{};
 };
 
+struct HotkeyUiState {
+    std::array<UINT, 3> modifiers{};
+    std::array<UINT, 3> virtualKeys{};
+    std::array<std::string, 3> labels{};
+    std::string_view error;
+};
+
 struct MainPanelCommand {
     bool chooseOutputDirectory{};
     int recoverRecordingIndex{-1};
@@ -56,6 +64,10 @@ struct MainPanelCommand {
     bool copyScreenshot{};
     bool saveScreenshot{};
     bool saveAndCopyScreenshot{};
+    int changeHotkeyAction{-1};
+    UINT hotkeyModifiers{};
+    UINT hotkeyVirtualKey{};
+    bool resetHotkeys{};
     int framesPerSecond{60};
     int quality{1};
     int gifFramesPerSecond{12};
@@ -73,6 +85,7 @@ public:
                                  const std::vector<EncoderUiChoice>& encoderChoices,
                                  std::string_view frameProcessingError,
                                  std::string_view screenshotStatus,
+                                 std::string_view targetOverlayStatus,
                                  std::string_view audioStatus,
                                  std::string_view recoveryStatus,
                                  std::string_view remuxStatus,
@@ -80,6 +93,7 @@ public:
                                  std::string_view outputDirectory,
                                  const std::vector<RecoverableRecordingUiItem>& recoverableRecordings,
                                  const RecordingUiState& recording,
+                                 const HotkeyUiState& hotkeys,
                                  CaptureTargetPicker& picker, WindowsGraphicsCapture& capture,
                                  HWND owner, ID3D11Device* device);
 };

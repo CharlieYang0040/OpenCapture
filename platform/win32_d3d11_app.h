@@ -14,7 +14,9 @@
 #include "encoder/ffmpeg_muxer.h"
 #include "encoder/ffmpeg_gif_converter.h"
 #include "core/session_state.h"
+#include "platform/capture_target_overlay.h"
 #include "platform/capture_target_picker.h"
+#include "platform/global_hotkeys.h"
 #include "platform/windows_graphics_capture.h"
 #include "ui/main_panel.h"
 
@@ -78,6 +80,7 @@ private:
     bool RunNvencSmoke(const ProcessedFrame& frame);
     bool RunEncoderFallbackSmoke();
     bool RunScreenshotSmoke();
+    void HandleHotkey(HotkeyAction action);
     void Render();
     void Shutdown();
 
@@ -96,6 +99,7 @@ private:
     std::string encoderSummary_;
     std::string frameProcessingError_;
     std::string screenshotStatus_;
+    std::string targetOverlayStatus_;
     std::string audioStatus_;
     std::string recoveryStatus_;
     std::string remuxStatus_;
@@ -147,6 +151,9 @@ private:
     std::uint64_t recordingFrameCount_{};
     double recordingElapsedSeconds_{};
     CaptureTargetPicker targetPicker_;
+    CaptureTargetOverlay targetOverlay_;
+    GlobalHotkeys globalHotkeys_;
+    std::uint32_t pendingHotkeyActions_{};
     WindowsGraphicsCapture capture_;
     bool captureSmokeMode_{};
     bool gpuCropSmokeMode_{};

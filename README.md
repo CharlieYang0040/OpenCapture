@@ -49,6 +49,10 @@ OpenCapture는 Windows 10/11을 위한 네이티브 화면 캡처 애플리케�
 - 스크린샷·녹화 공용 출력 폴더와 UI 폴더 선택
 - Enter 확정 후 메인 앱을 유지하고 재실행 시 모니터 연결까지 복원하는 영역 선택
 - 결과를 명확히 구분한 클립보드·PNG·비디오·GIF 버튼
+- 선택한 영역·창·모니터를 항상 위에 표시하는 클릭 통과 상태 테두리
+- 캡처 결과에서 제외되는 파란색 대기, 노란색 캡처, 주황색 일시정지 테두리
+- 충돌 감지와 자동 반복 방지를 적용한 사용자 지정 캡처·비디오·GIF 전역 단축키
+- 주요 버튼과 성능·용량 설정의 결과 중심 툴팁
 - drop-oldest 정책을 사용하는 제한 큐
 - 핵심 모델 단위 테스트와 Windows GitHub Actions CI
 
@@ -56,7 +60,7 @@ OpenCapture는 Windows 10/11을 위한 네이티브 화면 캡처 애플리케�
 
 - 오디오 장치 선택, 개별 볼륨·음소거, Opus와 장시간 드리프트 보정
 - VP9/Opus를 포함한 MP4/MKV/WebM 범용 오프라인 재인코딩
-- Desktop Duplication, 전역 단축키와 트레이
+- Desktop Duplication과 트레이
 - QSV/AMF 실기 검증과 장시간 성능 시험
 
 전체 개발 순서와 성능 기준은 [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md)에서 확인할 수 있습니다.

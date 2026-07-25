@@ -164,6 +164,13 @@ bool Win32D3D11App::Initialize(HINSTANCE instance, int showCommand) {
     window_ = CreateWindowW(kWindowClass, L"OpenCapture", WS_OVERLAPPEDWINDOW,
                             CW_USEDEFAULT, CW_USEDEFAULT, 860, 800, nullptr, nullptr, instance_, this);
     if (!window_ || !CreateDeviceAndSwapChain() || !frameProcessor_.Initialize(device_.Get(), context_.Get())) return false;
+    if (!targetOverlay_.Initialize(instance_)) {
+        targetOverlayStatus_ = targetOverlay_.LastError();
+    } else if (!targetOverlay_.CaptureExclusionAvailable()) {
+        targetOverlayStatus_ = targetOverlay_.LastError();
+    }
+    globalHotkeys_.Initialize(window_);
+    capture_.RequestBorderlessAccess();
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -933,6 +940,7 @@ bool Win32D3D11App::ProcessScreenshotFrame(const CapturedFrame& frame) {
         screenshotStatus_ = screenshotService_.LastError();
     }
     pendingScreenshot_.reset();
+    targetOverlay_.FlashScreenshot();
     if (screenshotOwnsCapture_) capture_.Stop();
     screenshotOwnsCapture_ = false;
     return success;
@@ -1570,11 +1578,32 @@ void Win32D3D11App::Render() {
             encoderChoices.push_back({capability.name, capability.displayName, capability.usable, capability.detail});
         }
     }
+    HotkeyUiState hotkeyUi{};
+    const auto& hotkeyBindings = globalHotkeys_.Bindings();
+    for (std::size_t index = 0; index < hotkeyBindings.size(); ++index) {
+        hotkeyUi.modifiers[index] = hotkeyBindings[index].modifiers;
+        hotkeyUi.virtualKeys[index] = hotkeyBindings[index].virtualKey;
+        hotkeyUi.labels[index] = globalHotkeys_.Label(static_cast<HotkeyAction>(index));
+    }
+    hotkeyUi.error = globalHotkeys_.LastError();
+    std::string overlayStatus = targetOverlayStatus_;
+    const auto borderlessStatus = capture_.BorderlessStatus();
+    if (!borderlessStatus.empty()) {
+        if (!overlayStatus.empty()) overlayStatus += " | ";
+        overlayStatus += borderlessStatus;
+    }
     const auto command = MainPanel::Draw(gpuName_, ffmpegVersion_, encoderSummary_, encoderChoices, frameProcessingError_,
-                                         screenshotStatus_, audioStatus_, recoveryStatus_, remuxStatus_, gifStatus_,
+                                         screenshotStatus_, overlayStatus, audioStatus_, recoveryStatus_, remuxStatus_, gifStatus_,
                                          outputDirectoryUtf8_,
                                          recoverableRecordings_,
-                                         recordingUi, targetPicker_, capture_, window_, device_.Get());
+                                         recordingUi, hotkeyUi, targetPicker_, capture_, window_, device_.Get());
+    if (command.changeHotkeyAction >= 0 &&
+        command.changeHotkeyAction < static_cast<int>(HotkeyAction::Count)) {
+        globalHotkeys_.SetBinding(
+            static_cast<HotkeyAction>(command.changeHotkeyAction),
+            {command.hotkeyModifiers, command.hotkeyVirtualKey});
+    }
+    if (command.resetHotkeys) globalHotkeys_.ResetDefaults();
     if (command.chooseOutputDirectory && !RecordingActive() && !mediaJobRunning_) ChooseOutputDirectory();
     if (command.recoverRecordingIndex >= 0) {
         RecoverRecording(static_cast<std::size_t>(command.recoverRecordingIndex));
@@ -1595,11 +1624,47 @@ void Win32D3D11App::Render() {
     if (command.copyScreenshot) StartScreenshot(ScreenshotDestination::Clipboard);
     if (command.saveScreenshot) StartScreenshot(ScreenshotDestination::File);
     if (command.saveAndCopyScreenshot) StartScreenshot(ScreenshotDestination::FileAndClipboard);
+
+    const std::uint32_t hotkeyActions = pendingHotkeyActions_;
+    pendingHotkeyActions_ = 0;
+    if ((hotkeyActions & (1U << static_cast<unsigned>(HotkeyAction::ScreenshotClipboard))) != 0) {
+        StartScreenshot(ScreenshotDestination::Clipboard);
+    }
+    if ((hotkeyActions & (1U << static_cast<unsigned>(HotkeyAction::ToggleVideoRecording))) != 0) {
+        if (RecordingActive()) {
+            StopRecording();
+        } else if (!mediaJobRunning_) {
+            StartRecording(command.framesPerSecond, command.quality, command.encoderName,
+                           command.systemAudio, command.microphone, command.remuxToMp4);
+        }
+    }
+    if ((hotkeyActions & (1U << static_cast<unsigned>(HotkeyAction::ToggleGifRecording))) != 0) {
+        if (RecordingActive()) {
+            StopRecording();
+        } else if (!mediaJobRunning_) {
+            StartRecording(command.gifFramesPerSecond, 0, command.encoderName,
+                           false, false, false, true, command.gifHeight, command.gifColors);
+        }
+    }
     if (recordingGif_ && recordingState_.Phase() == SessionPhase::Recording &&
         recordingElapsedSeconds_ >= gifDurationLimit_) {
         gifStatus_ = "GIF safety limit reached; creating the GIF...";
         StopRecording();
     }
+
+    CaptureOverlayState overlayState = CaptureOverlayState::Idle;
+    const auto currentPhase = recordingState_.Phase();
+    if (currentPhase == SessionPhase::Paused) {
+        overlayState = CaptureOverlayState::Paused;
+    } else if (currentPhase == SessionPhase::Starting ||
+               currentPhase == SessionPhase::Recording ||
+               currentPhase == SessionPhase::Stopping ||
+               pendingScreenshot_) {
+        overlayState = CaptureOverlayState::Capturing;
+    } else if (currentPhase == SessionPhase::Failed) {
+        overlayState = CaptureOverlayState::Error;
+    }
+    targetOverlay_.Update(targetPicker_.Selected(), overlayState);
 
     if (captureSmokeMode_ &&
         ((!gpuCropSmokeMode_ && capture_.FrameCount() >= 1) ||
@@ -1677,6 +1742,8 @@ void Win32D3D11App::Shutdown() {
     microphoneCapture_.Stop();
     processedFrame_.reset();
     frameProcessor_.Reset();
+    globalHotkeys_.Shutdown();
+    targetOverlay_.Shutdown();
     if (initialized_) {
         ImGui_ImplDX11_Shutdown();
         ImGui_ImplWin32_Shutdown();
@@ -1697,9 +1764,23 @@ void Win32D3D11App::Shutdown() {
     }
 }
 
+void Win32D3D11App::HandleHotkey(HotkeyAction action) {
+    pendingHotkeyActions_ |= 1U << static_cast<unsigned>(action);
+}
+
 LRESULT CALLBACK Win32D3D11App::WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
     if (ImGui::GetCurrentContext() && ImGui_ImplWin32_WndProcHandler(window, message, wParam, lParam)) return 1;
     switch (message) {
+    case WM_HOTKEY: {
+        HotkeyAction action{};
+        if (GlobalHotkeys::ActionForId(static_cast<int>(wParam), action)) {
+            auto* app = reinterpret_cast<Win32D3D11App*>(
+                GetWindowLongPtrW(window, GWLP_USERDATA));
+            if (app) app->HandleHotkey(action);
+            return 0;
+        }
+        break;
+    }
     case WM_SIZE:
         if (wParam != SIZE_MINIMIZED) {
             auto* app = reinterpret_cast<Win32D3D11App*>(GetWindowLongPtrW(window, GWLP_USERDATA));

@@ -56,7 +56,9 @@ if(OPENCAPTURE_BUILD_APP)
         encoder/ffmpeg_gif_converter.cpp
         gpu/d3d11_frame_processor.cpp
         image/screenshot_service.cpp
+        platform/capture_target_overlay.cpp
         platform/capture_target_picker.cpp
+        platform/global_hotkeys.cpp
         platform/windows_graphics_capture.cpp
         platform/win32_d3d11_app.cpp
         ui/main_panel.cpp

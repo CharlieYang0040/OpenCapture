@@ -49,6 +49,10 @@ Implemented:
 - One configurable output folder shared by screenshots and recordings
 - Region confirmation that returns to the main app and restores its monitor after restart
 - Result-oriented screenshot, video, and GIF controls
+- Click-through always-on-top borders for the selected region, window, or monitor
+- Capture-excluded blue idle, yellow capture, and orange paused border states
+- Configurable capture, video, and GIF global shortcuts with conflict and repeat protection
+- Result-oriented tooltips for primary actions and performance/size controls
 - Bounded queue with a drop-oldest overload policy
 - Core unit tests and Windows GitHub Actions CI
 
@@ -56,7 +60,7 @@ Not implemented yet:
 
 - Audio device selection, per-source volume/mute, Opus, and long-run drift correction
 - General MP4/MKV/WebM offline transcoding with VP9/Opus support
-- Desktop Duplication, global hotkeys, and tray integration
+- Desktop Duplication and tray integration
 - QSV/AMF hardware validation and long-running performance tests
 
 See [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md) for the roadmap and performance acceptance criteria.

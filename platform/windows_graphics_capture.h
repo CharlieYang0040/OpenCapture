@@ -28,6 +28,7 @@ public:
     WindowsGraphicsCapture& operator=(const WindowsGraphicsCapture&) = delete;
 
     bool Start(const CaptureTarget& target, ID3D11Device* device);
+    void RequestBorderlessAccess();
     void Stop() noexcept;
     [[nodiscard]] std::optional<CapturedFrame> TryPopFrame();
 
@@ -38,6 +39,7 @@ public:
     [[nodiscard]] std::int64_t LastFrameQpc() const noexcept;
     [[nodiscard]] CaptureTarget ActiveTarget() const noexcept;
     [[nodiscard]] std::string LastError() const;
+    [[nodiscard]] std::string BorderlessStatus() const;
 
 private:
     struct Impl;
