@@ -1,12 +1,116 @@
 #include "ui/main_panel.h"
 
+#include "platform/capture_target_picker.h"
+#include "platform/windows_graphics_capture.h"
+
+#include <d3d11.h>
 #include <imgui.h>
+#include <wrl/client.h>
 
 #include <array>
+#include <algorithm>
+#include <cstdint>
+#include <cstdio>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace opencapture {
+namespace {
 
-void MainPanel::Draw(std::string_view gpuName, std::string_view ffmpegVersion) {
+std::uint64_t IconFingerprint(const WindowEntry& window) {
+    std::uint64_t hash = 1469598103934665603ULL;
+    for (const auto pixel : window.iconPixels) {
+        hash ^= pixel;
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+struct CachedWindowIcon {
+    std::uint64_t fingerprint{};
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> view;
+};
+
+class WindowIconCache final {
+public:
+    ID3D11ShaderResourceView* Get(ID3D11Device* device, const WindowEntry& window) {
+        if (!device || !window.hasIcon) return nullptr;
+        const auto key = reinterpret_cast<std::uintptr_t>(window.handle);
+        const auto fingerprint = IconFingerprint(window);
+        auto found = icons_.find(key);
+        if (found != icons_.end() && found->second.fingerprint == fingerprint) return found->second.view.Get();
+
+        D3D11_TEXTURE2D_DESC description{};
+        description.Width = static_cast<UINT>(WindowEntry::IconWidth);
+        description.Height = static_cast<UINT>(WindowEntry::IconHeight);
+        description.MipLevels = 1;
+        description.ArraySize = 1;
+        description.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        description.SampleDesc.Count = 1;
+        description.Usage = D3D11_USAGE_IMMUTABLE;
+        description.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+        D3D11_SUBRESOURCE_DATA data{};
+        data.pSysMem = window.iconPixels.data();
+        data.SysMemPitch = static_cast<UINT>(WindowEntry::IconWidth * sizeof(std::uint32_t));
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+        if (FAILED(device->CreateTexture2D(&description, &data, &texture))) return nullptr;
+
+        CachedWindowIcon cached{};
+        cached.fingerprint = fingerprint;
+        if (FAILED(device->CreateShaderResourceView(texture.Get(), nullptr, &cached.view))) return nullptr;
+        auto& stored = icons_[key];
+        stored = std::move(cached);
+        return stored.view.Get();
+    }
+
+    void Prune(const std::vector<WindowEntry>& windows) {
+        std::unordered_set<std::uintptr_t> active;
+        active.reserve(windows.size());
+        for (const auto& window : windows) active.insert(reinterpret_cast<std::uintptr_t>(window.handle));
+        for (auto iterator = icons_.begin(); iterator != icons_.end();) {
+            if (!active.contains(iterator->first)) iterator = icons_.erase(iterator);
+            else ++iterator;
+        }
+    }
+
+private:
+    std::unordered_map<std::uintptr_t, CachedWindowIcon> icons_;
+};
+
+WindowIconCache& Icons() {
+    static WindowIconCache cache;
+    return cache;
+}
+
+void ExplainLastItem(const char* text, bool allowWhenDisabled = false) {
+    const ImGuiHoveredFlags flags = allowWhenDisabled ? ImGuiHoveredFlags_AllowWhenDisabled
+                                                       : ImGuiHoveredFlags_None;
+    if (ImGui::IsItemHovered(flags)) ImGui::SetTooltip("%s", text);
+}
+
+} // namespace
+
+MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmpegVersion,
+                                 std::string_view encoderSummary,
+                                 const std::vector<EncoderUiChoice>& encoderChoices,
+                                  std::string_view frameProcessingError,
+                                  std::string_view screenshotStatus,
+                                  std::string_view targetOverlayStatus,
+                                  std::string_view audioStatus,
+                                 std::string_view recoveryStatus,
+                                 std::string_view remuxStatus,
+                                 std::string_view gifStatus,
+                                  std::string_view outputDirectory,
+                                  const std::vector<RecoverableRecordingUiItem>& recoverableRecordings,
+                                  const RecordingUiState& recording,
+                                  const HotkeyUiState& hotkeys,
+                                  const BorderUiState& border,
+                                  CaptureTargetPicker& picker, WindowsGraphicsCapture& capture,
+                                 HWND owner, ID3D11Device* device) {
+    MainPanelCommand command{};
+    const bool mediaBusy = recording.mediaJobActive;
+    const bool outputBusy = recording.active || mediaBusy;
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(viewport->WorkPos);
     ImGui::SetNextWindowSize(viewport->WorkSize);
@@ -17,48 +121,510 @@ void MainPanel::Draw(std::string_view gpuName, std::string_view ffmpegVersion) {
     ImGui::TextUnformatted("OpenCapture");
     ImGui::Separator();
 
-    static int targetType = 0;
+    static int selectedEncoder = 0;
+    if (selectedEncoder > static_cast<int>(encoderChoices.size())) selectedEncoder = 0;
+    const char* encoderPreview = "Auto (recommended)";
+    if (selectedEncoder > 0) encoderPreview = encoderChoices[static_cast<std::size_t>(selectedEncoder - 1)].displayName.data();
+    ImGui::TextUnformatted("Video encoder");
+    ExplainLastItem("Auto selects the best available hardware encoder. A manual choice is useful for compatibility testing.");
+    ImGui::SameLine();
+    if (ImGui::BeginCombo("##VideoEncoder", encoderPreview)) {
+        if (ImGui::Selectable("Auto (recommended)", selectedEncoder == 0)) selectedEncoder = 0;
+        for (std::size_t index = 0; index < encoderChoices.size(); ++index) {
+            const auto& choice = encoderChoices[index];
+            if (!choice.usable) ImGui::BeginDisabled();
+            const bool selected = selectedEncoder == static_cast<int>(index + 1);
+            if (ImGui::Selectable(choice.displayName.data(), selected) && choice.usable) {
+                selectedEncoder = static_cast<int>(index + 1);
+            }
+            if (ImGui::IsItemHovered() && !choice.detail.empty()) ImGui::SetTooltip("%.*s", static_cast<int>(choice.detail.size()), choice.detail.data());
+            if (!choice.usable) ImGui::EndDisabled();
+        }
+        ImGui::EndCombo();
+    }
+
+    static int targetType = static_cast<int>(picker.Selected().type);
     ImGui::TextUnformatted("Target");
     ImGui::SameLine();
     ImGui::RadioButton("Window", &targetType, 0);
+    ExplainLastItem("Capture one window and keep the target border attached while it moves or resizes.");
     ImGui::SameLine();
     ImGui::RadioButton("Region", &targetType, 1);
+    ExplainLastItem("Capture only a rectangular desktop area. The selected area remains outlined.");
     ImGui::SameLine();
     ImGui::RadioButton("Monitor", &targetType, 2);
-    ImGui::Button("Select capture target", ImVec2(220.0F, 0.0F));
+    ExplainLastItem("Capture one entire monitor.");
+    if (ImGui::Button("Select capture target", ImVec2(220.0F, 0.0F))) {
+        if (targetType == static_cast<int>(CaptureTargetType::Region)) picker.SelectRegion(owner);
+        else { picker.Refresh(); ImGui::OpenPopup("Capture target"); }
+    }
+    ExplainLastItem("Choose the window, region, or monitor used by screenshots, video, and GIF recording.");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Refresh")) picker.Refresh();
+    ExplainLastItem("Refresh the list of currently available windows and monitors.");
+    ImGui::TextWrapped("Selected: %s", picker.SelectedLabel().c_str());
+    if (!targetOverlayStatus.empty()) {
+        ImGui::TextColored(ImVec4(1.0F, 0.75F, 0.25F, 1.0F), "%.*s",
+                           static_cast<int>(targetOverlayStatus.size()), targetOverlayStatus.data());
+    }
+
+    ImGui::Spacing();
+    ImGui::SeparatorText("Target border");
+    static bool borderSettingsInitialized = false;
+    static bool borderVisible = true;
+    static int borderThickness = 3;
+    static int borderOpacity = 85;
+    if (!borderSettingsInitialized) {
+        borderVisible = border.visible;
+        borderThickness = border.thickness;
+        borderOpacity = border.opacityPercent;
+        borderSettingsInitialized = true;
+    }
+    ImGui::Checkbox("Show target border", &borderVisible);
+    ExplainLastItem("Show or hide the always-on-top border around the selected target.");
+    ImGui::SliderInt("Border thickness", &borderThickness, 1, 12, "%d px");
+    ExplainLastItem("Use a thin border when you want the target guide to stay unobtrusive.");
+    ImGui::SliderInt("Border opacity", &borderOpacity, 20, 100, "%d%%");
+    ExplainLastItem("Lower opacity makes the border less distracting while keeping the target visible.");
+    if (ImGui::SmallButton("Apply border settings")) {
+        command.applyBorderSettings = true;
+        command.borderVisible = borderVisible;
+        command.borderThickness = borderThickness;
+        command.borderOpacityPercent = borderOpacity;
+    }
+    ExplainLastItem("Apply and save these settings for the next app launch.");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Reset border defaults")) {
+        borderVisible = true;
+        borderThickness = 3;
+        borderOpacity = 85;
+        command.resetBorderSettings = true;
+    }
+    ExplainLastItem("Restore visible, 3 px, and 85% opacity.");
+
+    static int selectedPreset = -1;
+    const auto& presets = picker.Presets();
+    const char* preview = selectedPreset >= 0 && selectedPreset < static_cast<int>(presets.size())
+        ? presets[static_cast<std::size_t>(selectedPreset)].name.c_str() : "Choose a saved region";
+    ImGui::SetNextItemWidth(260.0F);
+    if (ImGui::BeginCombo("Region preset", preview)) {
+        for (std::size_t index = 0; index < presets.size(); ++index) {
+            const bool selected = selectedPreset == static_cast<int>(index);
+            const std::string label = presets[index].name +
+                (presets[index].anchorType == RegionAnchorType::WindowClient ? "  [Window]##" : "  [Desktop]##") +
+                presets[index].id;
+            if (ImGui::Selectable(label.c_str(), selected)) selectedPreset = static_cast<int>(index);
+            if (selected) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Apply") && selectedPreset >= 0) {
+        if (picker.ApplyRegionPreset(static_cast<std::size_t>(selectedPreset))) {
+            targetType = static_cast<int>(CaptureTargetType::Region);
+        }
+    }
+    ExplainLastItem("Immediately use the selected saved region as the current capture target.", true);
+    ImGui::SameLine();
+    if (ImGui::Button("Save current")) {
+        picker.Refresh();
+        ImGui::OpenPopup("Save region preset");
+    }
+    ExplainLastItem("Save the current region for repeated browser or application captures.");
+    ImGui::SameLine();
+    if (ImGui::Button("Delete") && selectedPreset >= 0) {
+        if (picker.DeleteRegionPreset(static_cast<std::size_t>(selectedPreset))) selectedPreset = -1;
+    }
+    ExplainLastItem("Delete the selected saved region. This does not delete captured files.", true);
+    static char renameName[128]{};
+    if (selectedPreset >= 0) {
+        if (ImGui::SmallButton("Rename")) {
+            std::snprintf(renameName, sizeof(renameName), "%s", presets[static_cast<std::size_t>(selectedPreset)].name.c_str());
+            ImGui::OpenPopup("Rename region preset");
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Duplicate") && picker.DuplicateRegionPreset(static_cast<std::size_t>(selectedPreset))) ++selectedPreset;
+        ImGui::SameLine();
+        if (ImGui::ArrowButton("preset-up", ImGuiDir_Up) && picker.MoveRegionPreset(static_cast<std::size_t>(selectedPreset), -1)) --selectedPreset;
+        ImGui::SameLine();
+        if (ImGui::ArrowButton("preset-down", ImGuiDir_Down) && picker.MoveRegionPreset(static_cast<std::size_t>(selectedPreset), 1)) ++selectedPreset;
+    }
+
+    if (ImGui::BeginPopupModal("Rename region preset", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::InputText("New name", renameName, sizeof(renameName));
+        if (ImGui::Button("Rename") && selectedPreset >= 0 &&
+            picker.RenameRegionPreset(static_cast<std::size_t>(selectedPreset), renameName)) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+
+    static char presetName[128]{};
+    static int presetAnchor = static_cast<int>(RegionAnchorType::VirtualDesktop);
+    static int anchorWindow = 0;
+    if (ImGui::BeginPopupModal("Save region preset", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::InputText("Name", presetName, sizeof(presetName));
+        ImGui::RadioButton("Desktop coordinates", &presetAnchor, static_cast<int>(RegionAnchorType::VirtualDesktop));
+        ImGui::SameLine();
+        ImGui::RadioButton("Window-relative", &presetAnchor, static_cast<int>(RegionAnchorType::WindowClient));
+        if (presetAnchor == static_cast<int>(RegionAnchorType::WindowClient)) {
+            const auto& windows = picker.Windows();
+            if (anchorWindow >= static_cast<int>(windows.size())) anchorWindow = 0;
+            const char* windowPreview = windows.empty() ? "No window available" : windows[static_cast<std::size_t>(anchorWindow)].title.c_str();
+            if (ImGui::BeginCombo("Anchor window", windowPreview)) {
+                for (std::size_t index = 0; index < windows.size(); ++index) {
+                    const std::string label = windows[index].title + "  [" + windows[index].processName + "]##anchor" + std::to_string(index);
+                    if (ImGui::Selectable(label.c_str(), anchorWindow == static_cast<int>(index))) anchorWindow = static_cast<int>(index);
+                }
+                ImGui::EndCombo();
+            }
+        }
+        if (ImGui::Button("Save")) {
+            if (picker.CreateRegionPreset(presetName, static_cast<RegionAnchorType>(presetAnchor),
+                                          static_cast<std::size_t>(anchorWindow))) {
+                selectedPreset = static_cast<int>(picker.Presets().size()) - 1;
+                presetName[0] = '\0';
+                ImGui::CloseCurrentPopup();
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    if (!picker.LastError().empty()) ImGui::TextColored(ImVec4(1.0F, 0.4F, 0.35F, 1.0F), "%s", picker.LastError().c_str());
+
+    if (ImGui::BeginPopupModal("Capture target", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (targetType == static_cast<int>(CaptureTargetType::Window)) {
+            ImGui::TextUnformatted("Choose a visible top-level window");
+            ImGui::BeginChild("windows", ImVec2(560.0F, 300.0F), true);
+            const auto& windows = picker.Windows();
+            Icons().Prune(windows);
+            for (std::size_t index = 0; index < windows.size(); ++index) {
+                ImGui::PushID(static_cast<int>(index));
+                const std::string label = windows[index].title + "  [" + windows[index].processName + "]##" + std::to_string(index);
+                if (auto* icon = Icons().Get(device, windows[index])) {
+                    const auto textureId = static_cast<ImTextureID>(reinterpret_cast<std::uintptr_t>(icon));
+                    ImGui::Image(ImTextureRef(textureId), ImVec2(24.0F, 24.0F));
+                    ImGui::SameLine();
+                }
+                if (ImGui::Selectable(label.c_str(), false, ImGuiSelectableFlags_None, ImVec2(0.0F, 24.0F))) {
+                    picker.SelectWindow(index);
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::PopID();
+            }
+            ImGui::EndChild();
+        } else {
+            ImGui::TextUnformatted("Choose a monitor");
+            const auto& monitors = picker.Monitors();
+            for (std::size_t index = 0; index < monitors.size(); ++index) {
+                const auto& monitor = monitors[index];
+                const std::string label = monitor.deviceName + "  " +
+                    std::to_string(monitor.bounds.right - monitor.bounds.left) + "x" +
+                    std::to_string(monitor.bounds.bottom - monitor.bounds.top) +
+                    (monitor.primary ? "  (Primary)" : "") + "##" + std::to_string(index);
+                if (ImGui::Selectable(label.c_str())) { picker.SelectMonitor(index); ImGui::CloseCurrentPopup(); }
+            }
+        }
+        if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
 
     static int format = 0;
     static int fps = 60;
     static int quality = 1;
-    constexpr std::array formats{"MKV / H.264", "MP4 / H.264", "MKV / HEVC"};
+    constexpr std::array formats{"MKV / H.264", "MP4 copy / H.264"};
     constexpr std::array qualities{"Performance", "Balanced", "Quality"};
     ImGui::Combo("Format", &format, formats.data(), static_cast<int>(formats.size()));
+    ExplainLastItem("MKV is written safely while recording. MP4 copy remuxes the completed MKV without re-encoding.");
     ImGui::SliderInt("FPS", &fps, 15, 120);
+    ExplainLastItem("Higher FPS makes motion smoother but increases encoder load and file size.");
     ImGui::Combo("Quality", &quality, qualities.data(), static_cast<int>(qualities.size()));
+    ExplainLastItem("Performance reduces recording overhead; Quality uses a higher bitrate and creates larger files.");
+    command.framesPerSecond = fps;
+    command.quality = quality;
+    command.remuxToMp4 = format == 1;
 
     static bool systemAudio = true;
     static bool microphone = false;
     static bool cursor = true;
     ImGui::Checkbox("System audio", &systemAudio);
+    ExplainLastItem("Include sound played by Windows applications in video recordings. GIF never includes audio.");
     ImGui::SameLine();
     ImGui::Checkbox("Microphone", &microphone);
+    ExplainLastItem("Include the default microphone in video recordings. GIF never includes audio.");
     ImGui::SameLine();
     ImGui::Checkbox("Cursor", &cursor);
+    ExplainLastItem("Include the mouse pointer when supported by the active capture path.");
+    command.systemAudio = systemAudio;
+    command.microphone = microphone;
+    if (!audioStatus.empty()) {
+        ImGui::TextWrapped("Audio: %.*s", static_cast<int>(audioStatus.size()), audioStatus.data());
+    }
 
     ImGui::Spacing();
-    ImGui::Button("Screenshot", ImVec2(130.0F, 40.0F));
+    ImGui::SeparatorText("Output");
+    ImGui::TextWrapped("Screenshots, video recordings, and GIF files are saved in the same folder.");
+    ImGui::TextWrapped("Folder: %.*s", static_cast<int>(outputDirectory.size()), outputDirectory.data());
+    if (outputBusy) ImGui::BeginDisabled();
+    if (ImGui::Button("Change output folder...", ImVec2(210.0F, 32.0F))) {
+        command.chooseOutputDirectory = true;
+    }
+    if (!outputBusy) ExplainLastItem("Choose the shared folder used for PNG, video, GIF, and conversion outputs.");
+    if (outputBusy) {
+        ImGui::EndDisabled();
+        ExplainLastItem("Stop recording or wait for media conversion before changing the output folder.", true);
+    }
+
+    if (!recoverableRecordings.empty()) {
+        ImGui::Spacing();
+        ImGui::SeparatorText("Recording recovery");
+        ImGui::TextWrapped("Validate an incomplete MKV and finalize it without overwriting an existing recording.");
+        for (std::size_t index = 0; index < recoverableRecordings.size(); ++index) {
+            const auto& item = recoverableRecordings[index];
+            ImGui::PushID(static_cast<int>(index));
+            ImGui::Text("%s (%.1f MiB)", item.fileName.c_str(),
+                        static_cast<double>(item.sizeBytes) / (1024.0 * 1024.0));
+            ImGui::SameLine();
+            if (outputBusy) ImGui::BeginDisabled();
+            if (ImGui::SmallButton("Recover")) command.recoverRecordingIndex = static_cast<int>(index);
+            if (outputBusy) ImGui::EndDisabled();
+            ImGui::PopID();
+        }
+    }
+
+    ImGui::Spacing();
+    ImGui::SeparatorText("Global shortcuts");
+    ImGui::TextWrapped("These shortcuts work while OpenCapture is in the background.");
+    constexpr std::array hotkeyActionNames{
+        "Copy screenshot",
+        "Start / stop video",
+        "Start / stop GIF",
+    };
+    constexpr std::array modifierLabels{
+        "Ctrl + Shift", "Ctrl + Alt", "Alt + Shift", "Ctrl + Alt + Shift",
+    };
+    constexpr std::array<UINT, 4> modifierValues{
+        MOD_CONTROL | MOD_SHIFT,
+        MOD_CONTROL | MOD_ALT,
+        MOD_ALT | MOD_SHIFT,
+        MOD_CONTROL | MOD_ALT | MOD_SHIFT,
+    };
+    constexpr std::array keyLabels{
+        "F1", "F2", "F3", "F4", "F5", "F6",
+        "F7", "F8", "F9", "F10", "F11", "F12",
+    };
+    constexpr std::array<UINT, 12> keyValues{
+        VK_F1, VK_F2, VK_F3, VK_F4, VK_F5, VK_F6,
+        VK_F7, VK_F8, VK_F9, VK_F10, VK_F11, VK_F12,
+    };
+    static std::array<int, 3> modifierSelections{};
+    static std::array<int, 3> keySelections{};
+    static bool hotkeySelectionsInitialized = false;
+    if (!hotkeySelectionsInitialized) {
+        for (std::size_t action = 0; action < hotkeyActionNames.size(); ++action) {
+            const auto modifier = std::find(modifierValues.begin(), modifierValues.end(),
+                                            hotkeys.modifiers[action]);
+            const auto key = std::find(keyValues.begin(), keyValues.end(),
+                                       hotkeys.virtualKeys[action]);
+            modifierSelections[action] = modifier == modifierValues.end()
+                ? 0 : static_cast<int>(std::distance(modifierValues.begin(), modifier));
+            keySelections[action] = key == keyValues.end()
+                ? 0 : static_cast<int>(std::distance(keyValues.begin(), key));
+        }
+        hotkeySelectionsInitialized = true;
+    }
+    for (std::size_t action = 0; action < hotkeyActionNames.size(); ++action) {
+        ImGui::PushID(static_cast<int>(action));
+        ImGui::Text("%s  (current: %s)", hotkeyActionNames[action],
+                    hotkeys.labels[action].c_str());
+        ImGui::SetNextItemWidth(150.0F);
+        ImGui::Combo("##Modifiers", &modifierSelections[action],
+                     modifierLabels.data(), static_cast<int>(modifierLabels.size()));
+        ExplainLastItem("Choose modifier keys. OpenCapture requires modifiers to avoid intercepting normal typing.");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(85.0F);
+        ImGui::Combo("##Key", &keySelections[action],
+                     keyLabels.data(), static_cast<int>(keyLabels.size()));
+        ExplainLastItem("Choose a function key. Registration will fail safely if Windows or another app already uses it.");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Apply")) {
+            command.changeHotkeyAction = static_cast<int>(action);
+            command.hotkeyModifiers =
+                modifierValues[static_cast<std::size_t>(modifierSelections[action])];
+            command.hotkeyVirtualKey =
+                keyValues[static_cast<std::size_t>(keySelections[action])];
+        }
+        ExplainLastItem("Register this shortcut globally and save it for the next app launch.");
+        ImGui::PopID();
+    }
+    if (ImGui::SmallButton("Restore default shortcuts")) {
+        command.resetHotkeys = true;
+        modifierSelections = {0, 0, 0};
+        keySelections = {8, 9, 10};
+    }
+    ExplainLastItem("Restore Ctrl+Shift+F9, Ctrl+Shift+F10, and Ctrl+Shift+F11.");
+    if (!hotkeys.error.empty()) {
+        ImGui::TextColored(ImVec4(1.0F, 0.55F, 0.25F, 1.0F), "%.*s",
+                           static_cast<int>(hotkeys.error.size()), hotkeys.error.data());
+    }
+
+    ImGui::Spacing();
+    ImGui::SeparatorText("Diagnostics");
+    if (recording.active) {
+        ImGui::Text("Recording pipeline: %s", recording.starting ? "starting" : "active");
+    } else if (!capture.IsRunning()) {
+        if (ImGui::Button("Test WGC capture", ImVec2(170.0F, 32.0F))) {
+            capture.Start(picker.Selected(), device);
+        }
+    } else if (ImGui::Button("Stop capture test", ImVec2(170.0F, 32.0F))) {
+        capture.Stop();
+    }
     ImGui::SameLine();
-    ImGui::Button("GIF", ImVec2(100.0F, 40.0F));
+    ImGui::Text("Frames: %llu | queued: %zu | dropped: %llu",
+                static_cast<unsigned long long>(capture.FrameCount()), capture.QueuedFrameCount(),
+                static_cast<unsigned long long>(capture.DroppedFrameCount()));
+    const auto captureError = capture.LastError();
+    if (!captureError.empty()) ImGui::TextColored(ImVec4(1.0F, 0.4F, 0.35F, 1.0F), "%s", captureError.c_str());
+    if (!frameProcessingError.empty()) {
+        ImGui::TextColored(ImVec4(1.0F, 0.4F, 0.35F, 1.0F), "%.*s",
+                           static_cast<int>(frameProcessingError.size()), frameProcessingError.data());
+    }
+
+    ImGui::Spacing();
+    ImGui::SeparatorText("Screenshot");
+    ImGui::TextUnformatted("Capture one still image from the selected target.");
+    if (ImGui::Button("Copy to clipboard", ImVec2(155.0F, 42.0F))) command.copyScreenshot = true;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Copy the screenshot only. No file is created.");
     ImGui::SameLine();
-    ImGui::Button("Start recording", ImVec2(170.0F, 40.0F));
+    if (ImGui::Button("Save PNG file", ImVec2(140.0F, 42.0F))) command.saveScreenshot = true;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Save a PNG in the output folder.");
+    ImGui::SameLine();
+    if (ImGui::Button("Save PNG + copy", ImVec2(155.0F, 42.0F))) command.saveAndCopyScreenshot = true;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Save a PNG and also copy it to the clipboard.");
+    if (!screenshotStatus.empty()) {
+        ImGui::TextWrapped("%.*s", static_cast<int>(screenshotStatus.size()), screenshotStatus.data());
+    }
+
+    ImGui::Spacing();
+    ImGui::SeparatorText(recording.gif ? "GIF recording" : "Video");
+    ImGui::TextUnformatted(recording.gif
+        ? "Recording a silent, size-controlled GIF source from the selected target."
+        : "Record the selected target with the FPS, quality, and audio options above.");
+    if (recording.active) {
+        if (recording.paused) {
+            if (ImGui::Button(recording.gif ? "Resume GIF recording" : "Resume video recording", ImVec2(205.0F, 44.0F))) {
+                command.resumeRecording = true;
+            }
+            ExplainLastItem("Continue the current recording in the same output file.");
+        } else if (ImGui::Button(recording.gif ? "Pause GIF recording" : "Pause video recording", ImVec2(205.0F, 44.0F))) {
+            command.pauseRecording = true;
+        }
+        if (!recording.paused) ExplainLastItem("Pause frame and audio writing without finalizing the output file.");
+        ImGui::SameLine();
+        if (ImGui::Button(recording.gif ? "Stop and create GIF" : "Stop video recording", ImVec2(205.0F, 44.0F))) {
+            command.stopRecording = true;
+        }
+        ExplainLastItem(recording.gif
+                            ? "Stop recording, keep the safe MKV source, and create the optimized GIF."
+                            : "Finalize the current video so it can be opened by a media player.");
+    } else {
+        if (mediaBusy) ImGui::BeginDisabled();
+        if (ImGui::Button("Start video recording", ImVec2(205.0F, 44.0F))) {
+            command.startRecording = true;
+            if (selectedEncoder > 0) command.encoderName = encoderChoices[static_cast<std::size_t>(selectedEncoder - 1)].name;
+        }
+        if (mediaBusy) ImGui::EndDisabled();
+        ExplainLastItem(mediaBusy
+                            ? "Wait for the current GIF conversion to finish or cancel it first."
+                            : "Start recording the selected target with the video, quality, and audio settings above.",
+                        mediaBusy);
+    }
+    if (recording.active || !recording.outputPath.empty()) {
+        ImGui::Text("Recorded: %llu frames | %.2f s",
+                    static_cast<unsigned long long>(recording.frameCount), recording.elapsedSeconds);
+        ImGui::TextWrapped("Output: %.*s", static_cast<int>(recording.outputPath.size()), recording.outputPath.data());
+        if (!recording.encoderName.empty()) {
+            ImGui::Text("Active encoder: %.*s", static_cast<int>(recording.encoderName.size()), recording.encoderName.data());
+        }
+    }
+    if (!recording.active && !mediaBusy && recording.canRemux) {
+        if (ImGui::Button("Create MP4 copy", ImVec2(180.0F, 34.0F))) {
+            command.remuxLastRecording = true;
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Remux the last MKV without re-encoding. The source MKV is kept.");
+        }
+    }
+    if (!remuxStatus.empty()) {
+        ImGui::TextWrapped("%.*s", static_cast<int>(remuxStatus.size()), remuxStatus.data());
+    }
+    static int gifFpsIndex = 2;
+    static int gifHeightIndex = 2;
+    static int gifColorIndex = 3;
+    constexpr std::array gifFpsValues{6, 10, 12, 15, 20, 30};
+    constexpr std::array gifFpsLabels{"6 fps", "10 fps", "12 fps", "15 fps", "20 fps", "30 fps"};
+    constexpr std::array gifHeightValues{360, 480, 720, 1080};
+    constexpr std::array gifHeightLabels{"360p", "480p", "720p", "1080p"};
+    constexpr std::array gifColorValues{64, 128, 192, 256};
+    constexpr std::array gifColorLabels{"64 colors", "128 colors", "192 colors", "256 colors"};
+    ImGui::Spacing();
+    ImGui::SeparatorText("GIF size controls");
+    ImGui::TextWrapped("Lower resolution, FPS, and color count create much smaller GIF files. Recording stops automatically at 30 seconds or the safe pixel budget.");
+    if (outputBusy) ImGui::BeginDisabled();
+    ImGui::Combo("GIF FPS", &gifFpsIndex, gifFpsLabels.data(), static_cast<int>(gifFpsLabels.size()));
+    ExplainLastItem("Lower FPS greatly reduces GIF size. 12 fps is the recommended default.", outputBusy);
+    ImGui::Combo("GIF resolution", &gifHeightIndex, gifHeightLabels.data(), static_cast<int>(gifHeightLabels.size()));
+    ExplainLastItem("Limits output height while preserving aspect ratio. Lower resolution creates a much smaller GIF.", outputBusy);
+    ImGui::Combo("GIF colors", &gifColorIndex, gifColorLabels.data(), static_cast<int>(gifColorLabels.size()));
+    ExplainLastItem("Fewer palette colors reduce file size but may introduce visible banding.", outputBusy);
+    if (outputBusy) ImGui::EndDisabled();
+    command.gifFramesPerSecond = gifFpsValues[static_cast<std::size_t>(gifFpsIndex)];
+    command.gifHeight = gifHeightValues[static_cast<std::size_t>(gifHeightIndex)];
+    command.gifColors = gifColorValues[static_cast<std::size_t>(gifColorIndex)];
+    if (command.gifHeight >= 1080 || command.gifFramesPerSecond >= 30) {
+        ImGui::TextColored(ImVec4(1.0F, 0.75F, 0.25F, 1.0F),
+                           "Large GIF warning: use 720p / 12 fps or lower for sharing.");
+    }
+    if (!outputBusy &&
+        ImGui::Button("Start GIF recording", ImVec2(205.0F, 44.0F))) {
+        command.startGif = true;
+    }
+    if (!outputBusy && ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Records without audio, then creates an optimized GIF.");
+    }
+    if (mediaBusy) {
+        ImGui::ProgressBar(static_cast<float>(std::clamp(recording.mediaProgress, 0.0, 1.0)),
+                           ImVec2(-1.0F, 0.0F), "Creating GIF...");
+        if (recording.mediaCancelRequested) ImGui::BeginDisabled();
+        if (ImGui::Button(recording.mediaCancelRequested ? "Cancelling..." : "Cancel GIF conversion",
+                          ImVec2(205.0F, 36.0F))) {
+            command.cancelMediaJob = true;
+        }
+        if (recording.mediaCancelRequested) ImGui::EndDisabled();
+    }
+    if (!gifStatus.empty()) {
+        ImGui::TextWrapped("%.*s", static_cast<int>(gifStatus.size()), gifStatus.data());
+    }
+    if (!recording.error.empty()) {
+        ImGui::TextColored(ImVec4(1.0F, 0.4F, 0.35F, 1.0F), "%.*s",
+                           static_cast<int>(recording.error.size()), recording.error.data());
+    }
 
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Text("Ready | GPU: %.*s", static_cast<int>(gpuName.size()), gpuName.data());
     ImGui::Text("FFmpeg: %.*s", static_cast<int>(ffmpegVersion.size()), ffmpegVersion.data());
-    ImGui::TextDisabled("Capture and recording actions are enabled in the next milestone.");
+    ImGui::TextWrapped("Encoder: %.*s", static_cast<int>(encoderSummary.size()), encoderSummary.data());
+    if (!recoveryStatus.empty()) {
+        ImGui::TextColored(ImVec4(1.0F, 0.75F, 0.25F, 1.0F), "%.*s",
+                           static_cast<int>(recoveryStatus.size()), recoveryStatus.data());
+    }
+    ImGui::TextDisabled("GPU capture, synchronized audio, and recoverable recording are ready.");
     ImGui::End();
+    return command;
 }
 
 } // namespace opencapture
-
