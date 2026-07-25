@@ -51,6 +51,7 @@ Implemented:
 - Result-oriented screenshot, video, and GIF controls
 - Click-through always-on-top borders for the selected region, window, or monitor
 - Capture-excluded blue idle, yellow capture, and orange paused border states
+- Persistent target-border visibility, 1-12 px thickness, and 20-100% opacity controls
 - Configurable capture, video, and GIF global shortcuts with conflict and repeat protection
 - Result-oriented tooltips for primary actions and performance/size controls
 - Bounded queue with a drop-oldest overload policy

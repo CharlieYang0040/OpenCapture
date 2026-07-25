@@ -1586,6 +1586,12 @@ void Win32D3D11App::Render() {
         hotkeyUi.labels[index] = globalHotkeys_.Label(static_cast<HotkeyAction>(index));
     }
     hotkeyUi.error = globalHotkeys_.LastError();
+    const auto& borderSettings = targetOverlay_.Settings();
+    const BorderUiState borderUi{
+        borderSettings.visible,
+        borderSettings.thickness,
+        borderSettings.opacityPercent,
+    };
     std::string overlayStatus = targetOverlayStatus_;
     const auto borderlessStatus = capture_.BorderlessStatus();
     if (!borderlessStatus.empty()) {
@@ -1596,7 +1602,20 @@ void Win32D3D11App::Render() {
                                          screenshotStatus_, overlayStatus, audioStatus_, recoveryStatus_, remuxStatus_, gifStatus_,
                                          outputDirectoryUtf8_,
                                          recoverableRecordings_,
-                                         recordingUi, hotkeyUi, targetPicker_, capture_, window_, device_.Get());
+                                         recordingUi, hotkeyUi, borderUi,
+                                         targetPicker_, capture_, window_, device_.Get());
+    if (command.applyBorderSettings) {
+        targetOverlay_.ApplySettings({
+            command.borderVisible,
+            command.borderThickness,
+            command.borderOpacityPercent,
+        });
+        targetOverlayStatus_ = targetOverlay_.LastError();
+    }
+    if (command.resetBorderSettings) {
+        targetOverlay_.ResetSettings();
+        targetOverlayStatus_ = targetOverlay_.LastError();
+    }
     if (command.changeHotkeyAction >= 0 &&
         command.changeHotkeyAction < static_cast<int>(HotkeyAction::Count)) {
         globalHotkeys_.SetBinding(

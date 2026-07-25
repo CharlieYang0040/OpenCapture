@@ -105,6 +105,7 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
                                   const std::vector<RecoverableRecordingUiItem>& recoverableRecordings,
                                   const RecordingUiState& recording,
                                   const HotkeyUiState& hotkeys,
+                                  const BorderUiState& border,
                                   CaptureTargetPicker& picker, WindowsGraphicsCapture& capture,
                                  HWND owner, ID3D11Device* device) {
     MainPanelCommand command{};
@@ -166,6 +167,40 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
         ImGui::TextColored(ImVec4(1.0F, 0.75F, 0.25F, 1.0F), "%.*s",
                            static_cast<int>(targetOverlayStatus.size()), targetOverlayStatus.data());
     }
+
+    ImGui::Spacing();
+    ImGui::SeparatorText("Target border");
+    static bool borderSettingsInitialized = false;
+    static bool borderVisible = true;
+    static int borderThickness = 3;
+    static int borderOpacity = 85;
+    if (!borderSettingsInitialized) {
+        borderVisible = border.visible;
+        borderThickness = border.thickness;
+        borderOpacity = border.opacityPercent;
+        borderSettingsInitialized = true;
+    }
+    ImGui::Checkbox("Show target border", &borderVisible);
+    ExplainLastItem("Show or hide the always-on-top border around the selected target.");
+    ImGui::SliderInt("Border thickness", &borderThickness, 1, 12, "%d px");
+    ExplainLastItem("Use a thin border when you want the target guide to stay unobtrusive.");
+    ImGui::SliderInt("Border opacity", &borderOpacity, 20, 100, "%d%%");
+    ExplainLastItem("Lower opacity makes the border less distracting while keeping the target visible.");
+    if (ImGui::SmallButton("Apply border settings")) {
+        command.applyBorderSettings = true;
+        command.borderVisible = borderVisible;
+        command.borderThickness = borderThickness;
+        command.borderOpacityPercent = borderOpacity;
+    }
+    ExplainLastItem("Apply and save these settings for the next app launch.");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Reset border defaults")) {
+        borderVisible = true;
+        borderThickness = 3;
+        borderOpacity = 85;
+        command.resetBorderSettings = true;
+    }
+    ExplainLastItem("Restore visible, 3 px, and 85% opacity.");
 
     static int selectedPreset = -1;
     const auto& presets = picker.Presets();

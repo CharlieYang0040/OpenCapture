@@ -50,6 +50,12 @@ struct HotkeyUiState {
     std::string_view error;
 };
 
+struct BorderUiState {
+    bool visible{true};
+    int thickness{3};
+    int opacityPercent{85};
+};
+
 struct MainPanelCommand {
     bool chooseOutputDirectory{};
     int recoverRecordingIndex{-1};
@@ -68,6 +74,11 @@ struct MainPanelCommand {
     UINT hotkeyModifiers{};
     UINT hotkeyVirtualKey{};
     bool resetHotkeys{};
+    bool applyBorderSettings{};
+    bool resetBorderSettings{};
+    bool borderVisible{true};
+    int borderThickness{3};
+    int borderOpacityPercent{85};
     int framesPerSecond{60};
     int quality{1};
     int gifFramesPerSecond{12};
@@ -94,6 +105,7 @@ public:
                                  const std::vector<RecoverableRecordingUiItem>& recoverableRecordings,
                                  const RecordingUiState& recording,
                                  const HotkeyUiState& hotkeys,
+                                 const BorderUiState& border,
                                  CaptureTargetPicker& picker, WindowsGraphicsCapture& capture,
                                  HWND owner, ID3D11Device* device);
 };

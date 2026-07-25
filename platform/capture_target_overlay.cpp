@@ -1,14 +1,16 @@
 #include "platform/capture_target_overlay.h"
 
 #include <dwmapi.h>
+#include <ShlObj.h>
 
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
 
 namespace opencapture {
 namespace {
 
 constexpr wchar_t kOverlayWindowClass[] = L"OpenCaptureTargetOverlay";
-constexpr int kBorderThickness = 3;
 
 bool SameRect(const RECT& left, const RECT& right) noexcept {
     return left.left == right.left && left.top == right.top &&
@@ -28,6 +30,20 @@ bool SameTarget(const CaptureTarget& left, const CaptureTarget& right) noexcept 
            SameRect(left.region, right.region);
 }
 
+std::filesystem::path BorderSettingsPath() {
+    PWSTR localAppData{};
+    if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_CREATE,
+                                    nullptr, &localAppData))) {
+        return {};
+    }
+    std::filesystem::path directory(localAppData);
+    CoTaskMemFree(localAppData);
+    directory /= L"OpenCapture";
+    std::error_code error;
+    std::filesystem::create_directories(directory, error);
+    return error ? std::filesystem::path{} : directory / L"border_settings.txt";
+}
+
 } // namespace
 
 CaptureTargetOverlay::~CaptureTargetOverlay() {
@@ -37,6 +53,7 @@ CaptureTargetOverlay::~CaptureTargetOverlay() {
 bool CaptureTargetOverlay::Initialize(HINSTANCE instance) {
     if (windows_[0]) return true;
     instance_ = instance;
+    LoadSettings();
 
     WNDCLASSEXW windowClass{sizeof(windowClass)};
     windowClass.lpfnWndProc = WindowProc;
@@ -49,7 +66,8 @@ bool CaptureTargetOverlay::Initialize(HINSTANCE instance) {
         return false;
     }
 
-    constexpr DWORD extendedStyle = WS_EX_TOPMOST | WS_EX_TRANSPARENT |
+    constexpr DWORD extendedStyle = WS_EX_TOPMOST | WS_EX_LAYERED |
+                                    WS_EX_TRANSPARENT |
                                     WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
 #ifndef WDA_EXCLUDEFROMCAPTURE
 #define WDA_EXCLUDEFROMCAPTURE 0x00000011
@@ -66,6 +84,7 @@ bool CaptureTargetOverlay::Initialize(HINSTANCE instance) {
         }
         SetWindowDisplayAffinity(window, WDA_NONE);
     }
+    ApplyOpacity();
     if (!captureExclusionAvailable_) {
         lastError_ = "The capture target border could not be excluded from captured output.";
     }
@@ -78,6 +97,10 @@ void CaptureTargetOverlay::Update(const CaptureTarget& target, CaptureOverlaySta
     target_ = target;
     const bool stateChanged = state_ != state;
     state_ = state;
+    if (!settings_.visible) {
+        Hide();
+        return;
+    }
     const bool monitorCaptureActive =
         target.type == CaptureTargetType::Monitor &&
         (state == CaptureOverlayState::Capturing ||
@@ -90,13 +113,14 @@ void CaptureTargetOverlay::Update(const CaptureTarget& target, CaptureOverlaySta
     const bool repaintState = stateChanged || flashExpired ||
                               now < screenshotFlashUntil_;
     const bool dynamicTarget = target.type == CaptureTargetType::Window;
-    if (!targetChanged && !dynamicTarget) {
+    if (!targetChanged && !dynamicTarget && visible_ && !layoutDirty_) {
         if (repaintState) {
             for (const auto window : windows_) InvalidateRect(window, nullptr, FALSE);
         }
         return;
     }
-    if (!targetChanged && dynamicTarget && now - lastGeometryUpdate_ < 50) {
+    if (!targetChanged && dynamicTarget && visible_ && !layoutDirty_ &&
+        now - lastGeometryUpdate_ < 50) {
         if (repaintState) {
             for (const auto window : windows_) InvalidateRect(window, nullptr, FALSE);
         }
@@ -112,34 +136,35 @@ void CaptureTargetOverlay::Update(const CaptureTarget& target, CaptureOverlaySta
 
     const bool moved = !SameRect(bounds_, resolved);
     bounds_ = resolved;
-    if (moved || !visible_) {
+    if (moved || !visible_ || layoutDirty_) {
+        const LONG thickness = settings_.thickness;
         std::array<RECT, 4> borderRects{};
         if (target.type == CaptureTargetType::Monitor) {
             const LONG verticalHeight =
                 std::max<LONG>(1, bounds_.bottom - bounds_.top -
-                                  2 * kBorderThickness);
+                                  2 * thickness);
             borderRects = {{
                 {bounds_.left, bounds_.top, bounds_.right,
-                 bounds_.top + kBorderThickness},
-                {bounds_.left, bounds_.bottom - kBorderThickness,
+                 bounds_.top + thickness},
+                {bounds_.left, bounds_.bottom - thickness,
                  bounds_.right, bounds_.bottom},
-                {bounds_.left, bounds_.top + kBorderThickness,
-                 bounds_.left + kBorderThickness,
-                 bounds_.top + kBorderThickness + verticalHeight},
-                {bounds_.right - kBorderThickness,
-                 bounds_.top + kBorderThickness, bounds_.right,
-                 bounds_.top + kBorderThickness + verticalHeight},
+                {bounds_.left, bounds_.top + thickness,
+                 bounds_.left + thickness,
+                 bounds_.top + thickness + verticalHeight},
+                {bounds_.right - thickness,
+                 bounds_.top + thickness, bounds_.right,
+                 bounds_.top + thickness + verticalHeight},
             }};
         } else {
             borderRects = {{
-                {bounds_.left, bounds_.top - kBorderThickness,
+                {bounds_.left, bounds_.top - thickness,
                  bounds_.right, bounds_.top},
                 {bounds_.left, bounds_.bottom,
-                 bounds_.right, bounds_.bottom + kBorderThickness},
-                {bounds_.left - kBorderThickness, bounds_.top,
+                 bounds_.right, bounds_.bottom + thickness},
+                {bounds_.left - thickness, bounds_.top,
                  bounds_.left, bounds_.bottom},
                 {bounds_.right, bounds_.top,
-                 bounds_.right + kBorderThickness, bounds_.bottom},
+                 bounds_.right + thickness, bounds_.bottom},
             }};
         }
         for (std::size_t index = 0; index < windows_.size(); ++index) {
@@ -151,6 +176,7 @@ void CaptureTargetOverlay::Update(const CaptureTarget& target, CaptureOverlaySta
                          SWP_NOACTIVATE | SWP_SHOWWINDOW);
         }
         visible_ = true;
+        layoutDirty_ = false;
     }
     for (const auto window : windows_) {
         RedrawWindow(window, nullptr, nullptr,
@@ -166,6 +192,31 @@ void CaptureTargetOverlay::FlashScreenshot(std::uint32_t durationMilliseconds) {
                          RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
         }
     }
+}
+
+bool CaptureTargetOverlay::ApplySettings(CaptureBorderSettings settings) {
+    settings.thickness = std::clamp(settings.thickness, 1, 12);
+    settings.opacityPercent = std::clamp(settings.opacityPercent, 20, 100);
+    const auto previous = settings_;
+    settings_ = settings;
+    layoutDirty_ = layoutDirty_ ||
+        previous.thickness != settings_.thickness ||
+        previous.visible != settings_.visible;
+    ApplyOpacity();
+    if (!settings_.visible) Hide();
+    if (!SaveSettings()) {
+        settings_ = previous;
+        layoutDirty_ = true;
+        ApplyOpacity();
+        lastError_ = "Border settings could not be saved.";
+        return false;
+    }
+    lastError_.clear();
+    return true;
+}
+
+bool CaptureTargetOverlay::ResetSettings() {
+    return ApplySettings(CaptureBorderSettings{});
 }
 
 void CaptureTargetOverlay::Hide() {
@@ -189,6 +240,44 @@ void CaptureTargetOverlay::Shutdown() {
         instance_ = nullptr;
     }
     visible_ = false;
+}
+
+void CaptureTargetOverlay::LoadSettings() {
+    const auto path = BorderSettingsPath();
+    if (path.empty()) return;
+    std::ifstream input(path);
+    int visible{};
+    CaptureBorderSettings loaded{};
+    if (input >> visible >> loaded.thickness >> loaded.opacityPercent) {
+        loaded.visible = visible != 0;
+        loaded.thickness = std::clamp(loaded.thickness, 1, 12);
+        loaded.opacityPercent = std::clamp(loaded.opacityPercent, 20, 100);
+        settings_ = loaded;
+    }
+}
+
+bool CaptureTargetOverlay::SaveSettings() const {
+    const auto path = BorderSettingsPath();
+    if (path.empty()) return false;
+    const auto temporary = path.wstring() + L".tmp";
+    {
+        std::ofstream output(std::filesystem::path(temporary), std::ios::trunc);
+        if (!output) return false;
+        output << (settings_.visible ? 1 : 0) << ' '
+               << settings_.thickness << ' '
+               << settings_.opacityPercent << '\n';
+        if (!output) return false;
+    }
+    return MoveFileExW(temporary.c_str(), path.c_str(),
+                       MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
+}
+
+void CaptureTargetOverlay::ApplyOpacity() {
+    const BYTE alpha = static_cast<BYTE>(
+        std::clamp(settings_.opacityPercent, 20, 100) * 255 / 100);
+    for (const auto window : windows_) {
+        if (window) SetLayeredWindowAttributes(window, 0, alpha, LWA_ALPHA);
+    }
 }
 
 bool CaptureTargetOverlay::ResolveTargetRect(const CaptureTarget& target, RECT& bounds) const {

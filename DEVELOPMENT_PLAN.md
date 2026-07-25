@@ -709,6 +709,9 @@ OpenCapture/
   현상을 확인해, 영역과 창 테두리는 캡처 사각형 바깥에 배치하고 표시 affinity를
   `WDA_NONE`으로 유지한다. 영역은 GPU crop 밖이고 창 캡처는 별도 창을 포함하지 않으므로
   결과 영상에는 들어가지 않는다. 모니터 전체 대상만 캡처 중 조건부 제외를 사용한다.
+- Target border 설정에서 표시 여부, 1~12픽셀 굵기와 20~100% 불투명도를 변경하고
+  기본값(표시, 3픽셀, 85%)으로 복원할 수 있다. 설정은
+  `%LOCALAPPDATA%\OpenCapture\border_settings.txt`에 원자적으로 저장한다.
 - 창 경계는 최대 20Hz로 DWM 확장 프레임을 추적하고 최소화·숨김·cloaked 상태에서는
   테두리를 숨긴다. 영역과 모니터는 대상이 바뀔 때만 위치를 다시 계산한다.
 - Windows borderless 권한을 비동기로 요청하고 허용되면 `IsBorderRequired(false)`를
