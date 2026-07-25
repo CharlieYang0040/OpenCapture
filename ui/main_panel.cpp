@@ -185,9 +185,11 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     }
     ImGui::SameLine();
     if (ImGui::Button("Apply") && selectedPreset >= 0) {
-        if (picker.ApplyRegionPreset(static_cast<std::size_t>(selectedPreset), owner)) targetType = static_cast<int>(CaptureTargetType::Region);
+        if (picker.ApplyRegionPreset(static_cast<std::size_t>(selectedPreset))) {
+            targetType = static_cast<int>(CaptureTargetType::Region);
+        }
     }
-    ExplainLastItem("Use the selected saved region as the current capture target.", true);
+    ExplainLastItem("Immediately use the selected saved region as the current capture target.", true);
     ImGui::SameLine();
     if (ImGui::Button("Save current")) {
         picker.Refresh();

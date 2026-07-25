@@ -340,7 +340,7 @@ bool CaptureTargetPicker::CreateRegionPreset(std::string name, RegionAnchorType 
     return true;
 }
 
-bool CaptureTargetPicker::ApplyRegionPreset(std::size_t index, HWND owner) {
+bool CaptureTargetPicker::ApplyRegionPreset(std::size_t index) {
     lastError_.clear();
     if (index >= presets_.size()) { lastError_ = "Preset no longer exists."; return false; }
     const auto& preset = presets_[index];
@@ -370,10 +370,12 @@ bool CaptureTargetPicker::ApplyRegionPreset(std::size_t index, HWND owner) {
         ClientToScreen(anchor->handle, &origin);
         OffsetRect(&resolved, origin.x, origin.y);
     }
-    RECT confirmed{};
-    if (!RunRegionOverlay(owner, &resolved, confirmed)) return false;
+    if (resolved.right <= resolved.left || resolved.bottom <= resolved.top) {
+        lastError_ = "The preset resolved to an invalid region.";
+        return false;
+    }
     selected_ = CaptureTarget{CaptureTargetType::Region, nullptr,
-                              MonitorFromRect(&confirmed, MONITOR_DEFAULTTONEAREST), confirmed};
+                              MonitorFromRect(&resolved, MONITOR_DEFAULTTONEAREST), resolved};
     Save();
     return true;
 }

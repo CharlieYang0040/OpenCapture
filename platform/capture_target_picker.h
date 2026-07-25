@@ -43,7 +43,7 @@ public:
     bool SelectMonitor(std::size_t index);
     bool SelectRegion(HWND owner);
     bool CreateRegionPreset(std::string name, RegionAnchorType anchorType, std::size_t windowIndex = 0);
-    bool ApplyRegionPreset(std::size_t index, HWND owner);
+    bool ApplyRegionPreset(std::size_t index);
     bool DeleteRegionPreset(std::size_t index);
     bool RenameRegionPreset(std::size_t index, std::string name);
     bool DuplicateRegionPreset(std::size_t index);
