@@ -4,6 +4,7 @@
 
 #include <Windows.h>
 
+#include <array>
 #include <cstdint>
 #include <string>
 
@@ -39,10 +40,10 @@ private:
     static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam);
     [[nodiscard]] bool ResolveTargetRect(const CaptureTarget& target, RECT& bounds) const;
     [[nodiscard]] COLORREF CurrentColor() const noexcept;
-    void Paint();
+    void Paint(HWND window);
 
     HINSTANCE instance_{};
-    HWND window_{};
+    std::array<HWND, 4> windows_{};
     CaptureTarget target_{};
     CaptureOverlayState state_{CaptureOverlayState::Idle};
     RECT bounds_{};

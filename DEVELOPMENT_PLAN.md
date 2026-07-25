@@ -697,7 +697,9 @@ OpenCapture/
 
 현재 구현 상태 (2026-07-25):
 
-- 영역·모니터·창 경계를 따라가는 별도 `CaptureTargetOverlay` Win32 창을 구현했다.
+- 영역·모니터·창 경계를 따라가는 `CaptureTargetOverlay`를 구현했다. 전체 영역을 덮는
+  투명 레이어 창이 일부 Windows 합성 환경에서 보이지 않는 문제를 피하기 위해
+  위·아래·왼쪽·오른쪽 네 개의 3픽셀 실선 Win32 창으로 테두리를 구성한다.
 - `TOPMOST`, `LAYERED`, `TRANSPARENT`, `TOOLWINDOW`, `NOACTIVATE` 속성으로 항상 위에
   표시하면서 클릭, 포커스 및 Alt+Tab을 방해하지 않게 했다.
 - 대기 파란색, 캡처·녹화 노란색, 일시정지 주황색, 오류 빨간색 상태를 연결했으며

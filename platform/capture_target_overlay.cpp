@@ -9,7 +9,6 @@ namespace {
 
 constexpr wchar_t kOverlayWindowClass[] = L"OpenCaptureTargetOverlay";
 constexpr int kBorderThickness = 3;
-constexpr COLORREF kTransparentColor = RGB(1, 2, 3);
 
 bool SameRect(const RECT& left, const RECT& right) noexcept {
     return left.left == right.left && left.top == right.top &&
@@ -36,7 +35,7 @@ CaptureTargetOverlay::~CaptureTargetOverlay() {
 }
 
 bool CaptureTargetOverlay::Initialize(HINSTANCE instance) {
-    if (window_) return true;
+    if (windows_[0]) return true;
     instance_ = instance;
 
     WNDCLASSEXW windowClass{sizeof(windowClass)};
@@ -50,22 +49,25 @@ bool CaptureTargetOverlay::Initialize(HINSTANCE instance) {
         return false;
     }
 
-    constexpr DWORD extendedStyle = WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TRANSPARENT |
+    constexpr DWORD extendedStyle = WS_EX_TOPMOST | WS_EX_TRANSPARENT |
                                     WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
-    window_ = CreateWindowExW(
-        extendedStyle, kOverlayWindowClass, L"", WS_POPUP,
-        0, 0, 1, 1, nullptr, nullptr, instance_, this);
-    if (!window_) {
-        lastError_ = "Could not create the capture target overlay window.";
-        return false;
-    }
-
-    SetLayeredWindowAttributes(window_, kTransparentColor, 255, LWA_COLORKEY);
 #ifndef WDA_EXCLUDEFROMCAPTURE
 #define WDA_EXCLUDEFROMCAPTURE 0x00000011
 #endif
-    captureExclusionAvailable_ =
-        SetWindowDisplayAffinity(window_, WDA_EXCLUDEFROMCAPTURE) != FALSE;
+    captureExclusionAvailable_ = true;
+    for (auto& window : windows_) {
+        window = CreateWindowExW(
+            extendedStyle, kOverlayWindowClass, L"", WS_POPUP,
+            0, 0, 1, 1, nullptr, nullptr, instance_, this);
+        if (!window) {
+            lastError_ = "Could not create the capture target border windows.";
+            Shutdown();
+            return false;
+        }
+        captureExclusionAvailable_ =
+            SetWindowDisplayAffinity(window, WDA_EXCLUDEFROMCAPTURE) != FALSE &&
+            captureExclusionAvailable_;
+    }
     if (!captureExclusionAvailable_) {
         lastError_ = "The capture target border could not be excluded from captured output.";
     }
@@ -73,7 +75,7 @@ bool CaptureTargetOverlay::Initialize(HINSTANCE instance) {
 }
 
 void CaptureTargetOverlay::Update(const CaptureTarget& target, CaptureOverlayState state) {
-    if (!window_) return;
+    if (!windows_[0]) return;
     const bool targetChanged = !SameTarget(target_, target);
     target_ = target;
     const bool stateChanged = state_ != state;
@@ -86,11 +88,15 @@ void CaptureTargetOverlay::Update(const CaptureTarget& target, CaptureOverlaySta
                               now < screenshotFlashUntil_;
     const bool dynamicTarget = target.type == CaptureTargetType::Window;
     if (!targetChanged && !dynamicTarget) {
-        if (repaintState) InvalidateRect(window_, nullptr, FALSE);
+        if (repaintState) {
+            for (const auto window : windows_) InvalidateRect(window, nullptr, FALSE);
+        }
         return;
     }
     if (!targetChanged && dynamicTarget && now - lastGeometryUpdate_ < 50) {
-        if (repaintState) InvalidateRect(window_, nullptr, FALSE);
+        if (repaintState) {
+            for (const auto window : windows_) InvalidateRect(window, nullptr, FALSE);
+        }
         return;
     }
     lastGeometryUpdate_ = now;
@@ -104,28 +110,61 @@ void CaptureTargetOverlay::Update(const CaptureTarget& target, CaptureOverlaySta
     const bool moved = !SameRect(bounds_, resolved);
     bounds_ = resolved;
     if (moved || !visible_) {
-        SetWindowPos(window_, HWND_TOPMOST, bounds_.left, bounds_.top,
-                     bounds_.right - bounds_.left, bounds_.bottom - bounds_.top,
-                     SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        const LONG verticalHeight =
+            std::max<LONG>(1, bounds_.bottom - bounds_.top - 2 * kBorderThickness);
+        const std::array<RECT, 4> borderRects{{
+            {bounds_.left, bounds_.top, bounds_.right,
+             bounds_.top + kBorderThickness},
+            {bounds_.left, bounds_.bottom - kBorderThickness,
+             bounds_.right, bounds_.bottom},
+            {bounds_.left, bounds_.top + kBorderThickness,
+             bounds_.left + kBorderThickness,
+             bounds_.top + kBorderThickness + verticalHeight},
+            {bounds_.right - kBorderThickness,
+             bounds_.top + kBorderThickness, bounds_.right,
+             bounds_.top + kBorderThickness + verticalHeight},
+        }};
+        for (std::size_t index = 0; index < windows_.size(); ++index) {
+            const auto& rectangle = borderRects[index];
+            SetWindowPos(windows_[index], HWND_TOPMOST,
+                         rectangle.left, rectangle.top,
+                         rectangle.right - rectangle.left,
+                         rectangle.bottom - rectangle.top,
+                         SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        }
         visible_ = true;
     }
-    InvalidateRect(window_, nullptr, FALSE);
+    for (const auto window : windows_) {
+        RedrawWindow(window, nullptr, nullptr,
+                     RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
+    }
 }
 
 void CaptureTargetOverlay::FlashScreenshot(std::uint32_t durationMilliseconds) {
     screenshotFlashUntil_ = GetTickCount64() + std::max<std::uint32_t>(durationMilliseconds, 1);
-    if (window_) InvalidateRect(window_, nullptr, FALSE);
+    for (const auto window : windows_) {
+        if (window) {
+            RedrawWindow(window, nullptr, nullptr,
+                         RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
+        }
+    }
 }
 
 void CaptureTargetOverlay::Hide() {
-    if (window_ && visible_) ShowWindow(window_, SW_HIDE);
+    if (visible_) {
+        for (const auto window : windows_) {
+            if (window) ShowWindow(window, SW_HIDE);
+        }
+    }
     visible_ = false;
 }
 
 void CaptureTargetOverlay::Shutdown() {
-    if (window_) {
-        DestroyWindow(window_);
-        window_ = nullptr;
+    for (auto& window : windows_) {
+        if (window) {
+            DestroyWindow(window);
+            window = nullptr;
+        }
     }
     if (instance_) {
         UnregisterClassW(kOverlayWindowClass, instance_);
@@ -183,27 +222,15 @@ COLORREF CaptureTargetOverlay::CurrentColor() const noexcept {
     }
 }
 
-void CaptureTargetOverlay::Paint() {
+void CaptureTargetOverlay::Paint(HWND window) {
     PAINTSTRUCT paint{};
-    HDC deviceContext = BeginPaint(window_, &paint);
+    HDC deviceContext = BeginPaint(window, &paint);
     RECT client{};
-    GetClientRect(window_, &client);
-    HBRUSH transparent = CreateSolidBrush(kTransparentColor);
-    FillRect(deviceContext, &client, transparent);
-    DeleteObject(transparent);
-
-    const COLORREF color = CurrentColor();
-    HBRUSH border = CreateSolidBrush(color);
-    RECT top{client.left, client.top, client.right, std::min(client.bottom, client.top + kBorderThickness)};
-    RECT bottom{client.left, std::max(client.top, client.bottom - kBorderThickness), client.right, client.bottom};
-    RECT left{client.left, client.top, std::min(client.right, client.left + kBorderThickness), client.bottom};
-    RECT right{std::max(client.left, client.right - kBorderThickness), client.top, client.right, client.bottom};
-    FillRect(deviceContext, &top, border);
-    FillRect(deviceContext, &bottom, border);
-    FillRect(deviceContext, &left, border);
-    FillRect(deviceContext, &right, border);
+    GetClientRect(window, &client);
+    HBRUSH border = CreateSolidBrush(CurrentColor());
+    FillRect(deviceContext, &client, border);
     DeleteObject(border);
-    EndPaint(window_, &paint);
+    EndPaint(window, &paint);
 }
 
 LRESULT CALLBACK CaptureTargetOverlay::WindowProc(HWND window, UINT message,
@@ -223,7 +250,7 @@ LRESULT CALLBACK CaptureTargetOverlay::WindowProc(HWND window, UINT message,
     case WM_NCHITTEST:
         return HTTRANSPARENT;
     case WM_PAINT:
-        if (overlay) overlay->Paint();
+        if (overlay) overlay->Paint(window);
         return 0;
     case WM_TIMER:
         InvalidateRect(window, nullptr, FALSE);
