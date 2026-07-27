@@ -6,6 +6,9 @@ OpenCapture is a native screen capture application for Windows 10 and 11. Its go
 
 The project is an actively developed technical prototype. It can capture a window, monitor, or region with Windows Graphics Capture, crop and scale on D3D11, and produce H.264/AAC MKV/MP4 recordings, palette-optimized GIFs, or PNG/clipboard still captures.
 
+The latest technical preview is [OpenCapture v0.2.0](https://github.com/CharlieYang0040/OpenCapture/releases/tag/v0.2.0).
+See the [v0.2.0 release notes](docs/releases/v0.2.0.md) for its exact scope and validation boundary.
+
 ## Goals
 
 - Use Windows Graphics Capture and Desktop Duplication where appropriate
@@ -98,6 +101,16 @@ require prior approval for screen or audio capture regardless of code-signing st
 
 OpenCapture currently requires no credentials. Do not commit credentials or machine-specific absolute paths.
 
+## Install a release build
+
+Download `OpenCapture-0.2.0-windows-x64.zip` and `SHA256SUMS.txt` from GitHub Releases,
+verify the SHA-256, and extract the entire ZIP into one folder. Keep the DLLs and `licenses`
+directory beside `OpenCapture.exe`. This technical preview is not yet Authenticode-signed and
+may trigger SmartScreen or corporate security controls.
+Corresponding FFmpeg source references, the exact vcpkg port and patches, and the linked build
+configuration are included in the release ZIP and the separate
+`OpenCapture-0.2.0-ffmpeg-build-materials.zip` asset.
+
 ## Quick start on a new PC
 
 Run the following commands in a regular PowerShell terminal:
@@ -121,6 +134,12 @@ Use these options to build Release or only prepare the tooling:
 ```powershell
 .\scripts\setup.ps1 -Configuration Release
 .\scripts\setup.ps1 -SkipBuild
+```
+
+After a successful Release build, reproduce the verified distribution ZIP with:
+
+```powershell
+.\scripts\package_release.ps1 -Version 0.2.0
 ```
 
 ### Build flow

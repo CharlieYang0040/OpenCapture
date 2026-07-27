@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(OpenCapture VERSION 0.1.0 LANGUAGES CXX)
+project(OpenCapture VERSION 0.2.0 LANGUAGES CXX)
 
 if(NOT WIN32)
     message(FATAL_ERROR "OpenCapture is a Windows-only application")
@@ -49,7 +49,14 @@ if(OPENCAPTURE_BUILD_APP)
     find_library(AVFILTER_LIBRARY avfilter REQUIRED)
     find_library(AVFORMAT_LIBRARY avformat REQUIRED)
 
+    configure_file(
+        app/OpenCapture.rc.in
+        ${CMAKE_CURRENT_BINARY_DIR}/OpenCapture.rc
+        @ONLY
+    )
+
     add_executable(OpenCapture WIN32
+        ${CMAKE_CURRENT_BINARY_DIR}/OpenCapture.rc
         app/main.cpp
         encoder/ffmpeg_audio_encoder.cpp
         encoder/ffmpeg_d3d11_encoder.cpp
@@ -110,6 +117,16 @@ if(OPENCAPTURE_BUILD_APP)
         target_compile_definitions(opencapture_wasapi_probe PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
         if(MSVC)
             target_compile_options(opencapture_wasapi_probe PRIVATE /W4 /permissive- /Zc:__cplusplus)
+        endif()
+
+        add_executable(opencapture_ffmpeg_build_info
+            tools/ffmpeg_build_info.cpp
+        )
+        target_include_directories(opencapture_ffmpeg_build_info SYSTEM PRIVATE ${FFMPEG_INCLUDE_DIR})
+        target_link_libraries(opencapture_ffmpeg_build_info PRIVATE ${AVUTIL_LIBRARY})
+        target_compile_definitions(opencapture_ffmpeg_build_info PRIVATE __STDC_CONSTANT_MACROS)
+        if(MSVC)
+            target_compile_options(opencapture_ffmpeg_build_info PRIVATE /W4 /permissive- /Zc:__cplusplus)
         endif()
     endif()
 endif()

@@ -633,6 +633,21 @@ OpenCapture/
 
 각 마일스톤은 Debug/Release 빌드, 관련 자동 테스트 및 실제 결과물 검증을 완료해야 종료한다.
 
+### 12.0.2 v0.2.0 배포 기준점
+
+v0.2.0은 Quick Capture, 스크린샷 단축키 결과 설정, Region 선택 중 메인 창 숨김,
+Capture/Video/GIF/Settings 탭, 적응형 DPI UI와 opt-in 알림 영역 상주를 포함하는
+저부하 최적화 직전 기준점이다.
+
+- 신규 사용자의 창 닫기 기본값은 완전 종료이며 저장된 opt-in 설정만 트레이에 상주한다.
+- Windows 서비스, 자동 시작, 예약 작업, 관리자 권한, 프로세스/DLL 주입 및 게임 후킹을
+  사용하지 않는 동작 범위를 한·영 README와 릴리스 노트에 명시한다.
+- CMake, vcpkg manifest와 Windows EXE 버전을 0.2.0으로 일치시킨다.
+- `scripts/package_release.ps1`로 런타임 DLL, 제3자 고지, FFmpeg 실제 빌드 옵션,
+  소스 커밋, 서명 상태, 파일별 해시 및 최종 ZIP SHA-256을 재현한다.
+- 변환 전 FPS gate, 백그라운드 ImGui/Present 중단과 BGRA NVENC 직접 입력은 조사 결과만
+  보존하고 v0.2.0에 섞지 않는다. 이후 각각 독립 측정해 채택한다.
+
 ### 12.0.1 2026-07-27 중간 점검에서 발견한 문제와 개선 항목
 
 | 우선순위 | 영역 | 현재 문제 | 개선 및 완료 조건 |
