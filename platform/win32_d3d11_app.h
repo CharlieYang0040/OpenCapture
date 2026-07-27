@@ -18,6 +18,7 @@
 #include "platform/capture_target_overlay.h"
 #include "platform/capture_target_picker.h"
 #include "platform/global_hotkeys.h"
+#include "platform/system_tray.h"
 #include "platform/windows_graphics_capture.h"
 #include "ui/main_panel.h"
 
@@ -100,6 +101,9 @@ private:
     bool SaveUiScaleSettings() const;
     void LoadScreenshotSettings();
     bool SaveScreenshotSettings() const;
+    void LoadTraySettings();
+    bool SaveTraySettings() const;
+    void ShowMainWindow();
     void ApplyUiScale();
     bool SetUiScalePercent(int percent);
     void RefreshWindowDpi();
@@ -176,8 +180,13 @@ private:
     CaptureTargetPicker targetPicker_;
     CaptureTargetOverlay targetOverlay_;
     GlobalHotkeys globalHotkeys_;
+    SystemTray systemTray_;
     std::uint32_t pendingHotkeyActions_{};
     bool regionSelectionActive_{};
+    bool closeToTray_{true};
+    bool exitRequested_{};
+    bool automatedMode_{};
+    std::string trayStatus_;
     UINT windowDpi_{96};
     int uiScalePercent_{100};
     float effectiveUiScale_{1.0F};

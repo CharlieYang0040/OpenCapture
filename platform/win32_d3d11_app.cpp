@@ -123,6 +123,12 @@ std::filesystem::path ScreenshotSettingsPath() {
     return path;
 }
 
+std::filesystem::path TraySettingsPath() {
+    auto path = OutputSettingsPath();
+    if (!path.empty()) path.replace_filename(L"tray_settings.txt");
+    return path;
+}
+
 bool SameCaptureTarget(const CaptureTarget& left, const CaptureTarget& right) noexcept {
     if (left.type != right.type) return false;
     switch (left.type) {
@@ -175,6 +181,37 @@ bool Win32D3D11App::SaveScreenshotSettings() const {
     }
     return MoveFileExW(temporary.c_str(), path.c_str(),
                        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
+}
+
+void Win32D3D11App::LoadTraySettings() {
+    std::ifstream input(TraySettingsPath());
+    if (!input) return;
+    std::string line;
+    while (std::getline(input, line)) {
+        if (line == "close_to_tray=0") closeToTray_ = false;
+        if (line == "close_to_tray=1") closeToTray_ = true;
+    }
+}
+
+bool Win32D3D11App::SaveTraySettings() const {
+    const auto path = TraySettingsPath();
+    if (path.empty()) return false;
+    const std::filesystem::path temporary(path.wstring() + L".tmp");
+    {
+        std::ofstream output(temporary, std::ios::trunc);
+        if (!output) return false;
+        output << "close_to_tray=" << (closeToTray_ ? 1 : 0) << '\n';
+        if (!output) return false;
+    }
+    return MoveFileExW(temporary.c_str(), path.c_str(),
+                       MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
+}
+
+void Win32D3D11App::ShowMainWindow() {
+    if (!window_) return;
+    ShowWindow(window_, IsIconic(window_) ? SW_RESTORE : SW_SHOW);
+    SetForegroundWindow(window_);
+    UpdateWindow(window_);
 }
 
 void Win32D3D11App::LoadUiScaleSettings() {
@@ -246,6 +283,7 @@ bool Win32D3D11App::Initialize(HINSTANCE instance, int showCommand) {
     instance_ = instance;
     LoadUiScaleSettings();
     LoadScreenshotSettings();
+    LoadTraySettings();
     winrt::init_apartment(winrt::apartment_type::single_threaded);
     captureSmokeMode_ = std::wcsstr(GetCommandLineW(), L"--wgc-smoke") != nullptr;
     gpuCropSmokeMode_ = std::wcsstr(GetCommandLineW(), L"--gpu-crop-smoke") != nullptr;
@@ -274,6 +312,9 @@ bool Win32D3D11App::Initialize(HINSTANCE instance, int showCommand) {
     gpuNv12SmokeMode_ = gpuNv12SmokeMode_ || nvencSmokeMode_;
     gpuCropSmokeMode_ = gpuCropSmokeMode_ || gpuNv12SmokeMode_;
     captureSmokeMode_ = captureSmokeMode_ || gpuCropSmokeMode_;
+    automatedMode_ = captureSmokeMode_ || realtimeRecordSmokeMode_ ||
+                     encoderFallbackSmokeMode_ || screenshotSmokeMode_ ||
+                     recoverySmokeMode_ || remuxSmokeMode_ || gifConvertSmokeMode_;
     ImGui_ImplWin32_EnableDpiAwareness();
     const HMONITOR initialMonitor = MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
     const float initialDpiScale = ImGui_ImplWin32_GetDpiScaleForMonitor(initialMonitor);
@@ -313,6 +354,11 @@ bool Win32D3D11App::Initialize(HINSTANCE instance, int showCommand) {
         targetOverlayStatus_ = targetOverlay_.LastError();
     }
     globalHotkeys_.Initialize(window_);
+    if (systemTray_.Initialize(window_, instance_)) {
+        trayStatus_ = "OpenCapture remains available in the notification area.";
+    } else {
+        trayStatus_ = "Notification area icon unavailable; closing the window exits the app.";
+    }
     capture_.RequestBorderlessAccess();
 
     IMGUI_CHECKVERSION();
@@ -417,7 +463,14 @@ int Win32D3D11App::Run() {
             TranslateMessage(&message);
             DispatchMessageW(&message);
         } else {
-            Render();
+            const bool backgroundIdle = window_ && !IsWindowVisible(window_) &&
+                !RecordingActive() && !pendingScreenshot_ && !mediaJobRunning_;
+            const bool hasPendingHotkey = pendingHotkeyActions_ != 0;
+            if (backgroundIdle && !hasPendingHotkey) {
+                WaitMessage();
+            } else {
+                Render();
+            }
         }
     }
     return captureSmokeFailed_ ? 2 : static_cast<int>(message.wParam);
@@ -1842,6 +1895,11 @@ void Win32D3D11App::Render() {
     const ScreenshotUiState screenshotUi{
         screenshotHotkeyDestination_,
     };
+    const TrayUiState trayUi{
+        systemTray_.Available(),
+        closeToTray_,
+        trayStatus_,
+    };
     std::string overlayStatus = targetOverlayStatus_;
     const auto borderlessStatus = capture_.BorderlessStatus();
     if (!borderlessStatus.empty()) {
@@ -1853,7 +1911,7 @@ void Win32D3D11App::Render() {
                                          outputDirectoryUtf8_,
                                          recoverableRecordings_,
                                          recordingUi, hotkeyUi, borderUi, regionSelectionUi, displayUi,
-                                         screenshotUi,
+                                         screenshotUi, trayUi,
                                          targetPicker_, capture_, device_.Get());
     if (command.applyUiScale) {
         SetUiScalePercent(command.uiScalePercent);
@@ -1873,6 +1931,18 @@ void Win32D3D11App::Render() {
         } else {
             screenshotHotkeyDestination_ = previous;
             screenshotStatus_ = "Screenshot shortcut result could not be saved.";
+        }
+    }
+    if (command.applyCloseToTray) {
+        const bool previous = closeToTray_;
+        closeToTray_ = command.closeToTray;
+        if (SaveTraySettings()) {
+            trayStatus_ = closeToTray_
+                ? "Closing the window now keeps OpenCapture in the notification area."
+                : "Closing the window now exits OpenCapture.";
+        } else {
+            closeToTray_ = previous;
+            trayStatus_ = "Background setting could not be saved.";
         }
     }
     if (command.applyBorderSettings) {
@@ -2048,6 +2118,7 @@ void Win32D3D11App::Shutdown() {
     CancelMediaJob();
     if (mediaWorker_.joinable()) mediaWorker_.join();
     capture_.Stop();
+    systemTray_.Shutdown();
     muxer_.Close();
     videoEncoder_.Close();
     audioEncoder_.Close();
@@ -2084,20 +2155,52 @@ void Win32D3D11App::HandleHotkey(HotkeyAction action) {
 
 LRESULT CALLBACK Win32D3D11App::WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
     if (ImGui::GetCurrentContext() && ImGui_ImplWin32_WndProcHandler(window, message, wParam, lParam)) return 1;
+    auto* app = reinterpret_cast<Win32D3D11App*>(
+        GetWindowLongPtrW(window, GWLP_USERDATA));
+    if (app && app->systemTray_.TaskbarCreatedMessage() != 0 &&
+        message == app->systemTray_.TaskbarCreatedMessage()) {
+        app->trayStatus_ = app->systemTray_.Restore()
+            ? "Notification area icon restored after Explorer restarted."
+            : "Notification area icon could not be restored; closing the window exits the app.";
+        return 0;
+    }
     switch (message) {
+    case SystemTray::CallbackMessage(): {
+        if (!app) break;
+        const bool quickCaptureAvailable =
+            !app->RecordingActive() && !app->mediaJobRunning_ &&
+            !app->pendingScreenshot_ && !app->regionSelectionActive_;
+        switch (app->systemTray_.HandleCallback(
+                    lParam, app->RecordingActive(), quickCaptureAvailable)) {
+        case SystemTrayCommand::Open:
+            app->ShowMainWindow();
+            break;
+        case SystemTrayCommand::QuickCapture:
+            app->HandleHotkey(HotkeyAction::QuickCapture);
+            break;
+        case SystemTrayCommand::StopRecording:
+            app->HandleHotkey(app->recordingGif_
+                ? HotkeyAction::ToggleGifRecording
+                : HotkeyAction::ToggleVideoRecording);
+            break;
+        case SystemTrayCommand::Exit:
+            app->exitRequested_ = true;
+            PostMessageW(window, WM_CLOSE, 0, 0);
+            break;
+        case SystemTrayCommand::None:
+            break;
+        }
+        return 0;
+    }
     case WM_HOTKEY: {
         HotkeyAction action{};
         if (GlobalHotkeys::ActionForId(static_cast<int>(wParam), action)) {
-            auto* app = reinterpret_cast<Win32D3D11App*>(
-                GetWindowLongPtrW(window, GWLP_USERDATA));
             if (app) app->HandleHotkey(action);
             return 0;
         }
         break;
     }
     case WM_DPICHANGED: {
-        auto* app = reinterpret_cast<Win32D3D11App*>(
-            GetWindowLongPtrW(window, GWLP_USERDATA));
         if (app) {
             const UINT dpi = LOWORD(wParam);
             if (dpi != 0) app->windowDpi_ = dpi;
@@ -2115,7 +2218,6 @@ LRESULT CALLBACK Win32D3D11App::WindowProc(HWND window, UINT message, WPARAM wPa
     }
     case WM_SIZE:
         if (wParam != SIZE_MINIMIZED) {
-            auto* app = reinterpret_cast<Win32D3D11App*>(GetWindowLongPtrW(window, GWLP_USERDATA));
             if (app && app->swapChain_) {
                 app->CleanupRenderTarget();
                 app->swapChain_->ResizeBuffers(0, LOWORD(lParam), HIWORD(lParam), DXGI_FORMAT_UNKNOWN, 0);
@@ -2125,6 +2227,14 @@ LRESULT CALLBACK Win32D3D11App::WindowProc(HWND window, UINT message, WPARAM wPa
         return 0;
     case WM_SYSCOMMAND:
         if ((wParam & 0xfff0U) == SC_KEYMENU) return 0;
+        break;
+    case WM_CLOSE:
+        if (app && app->closeToTray_ && app->systemTray_.Available() &&
+            !app->exitRequested_ && !app->automatedMode_) {
+            ShowWindow(window, SW_HIDE);
+            app->trayStatus_ = "OpenCapture is running in the notification area.";
+            return 0;
+        }
         break;
     case WM_DESTROY:
         PostQuitMessage(0);

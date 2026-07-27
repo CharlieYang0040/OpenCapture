@@ -56,6 +56,12 @@ struct ScreenshotUiState {
     ScreenshotDestination shortcutDestination{ScreenshotDestination::Clipboard};
 };
 
+struct TrayUiState {
+    bool available{};
+    bool closeToTray{true};
+    std::string_view status;
+};
+
 struct BorderUiState {
     bool visible{true};
     int thickness{3};
@@ -90,6 +96,7 @@ struct MainPanelCommand {
     bool saveAndCopyScreenshot{};
     bool quickCapture{};
     bool applyScreenshotShortcutDestination{};
+    bool applyCloseToTray{};
     int changeHotkeyAction{-1};
     UINT hotkeyModifiers{};
     UINT hotkeyVirtualKey{};
@@ -106,6 +113,7 @@ struct MainPanelCommand {
     int regionOutsideDimmingPercent{30};
     int uiScalePercent{100};
     ScreenshotDestination screenshotShortcutDestination{ScreenshotDestination::Clipboard};
+    bool closeToTray{true};
     int framesPerSecond{60};
     int quality{1};
     int gifFramesPerSecond{12};
@@ -136,6 +144,7 @@ public:
                                   const RegionSelectionUiState& regionSelection,
                                   const DisplayUiState& display,
                                   const ScreenshotUiState& screenshot,
+                                  const TrayUiState& tray,
                                   CaptureTargetPicker& picker, WindowsGraphicsCapture& capture,
                                   ID3D11Device* device);
 };

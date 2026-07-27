@@ -60,6 +60,8 @@ Implemented:
 - Configurable shortcut output: clipboard, PNG file, or both
 - `Ctrl+Shift+F8` Quick Capture without changing the persistent region or presets
 - Automatic main-window hiding during region selection and Capture/Video/GIF/Settings tabs
+- Notification-area background operation with configurable close behavior
+- Notification-area actions for opening the app, Quick Capture, stopping a recording, and fully exiting
 - Bounded queue with a drop-oldest overload policy
 - Core unit tests and Windows GitHub Actions CI
 
@@ -67,7 +69,7 @@ Not implemented yet:
 
 - Audio device selection, per-source volume/mute, Opus, and long-run drift correction
 - General MP4/MKV/WebM offline transcoding with VP9/Opus support
-- Desktop Duplication and tray integration
+- Desktop Duplication
 - QSV/AMF hardware validation and long-running performance tests
 
 See [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md) for the roadmap and performance acceptance criteria.

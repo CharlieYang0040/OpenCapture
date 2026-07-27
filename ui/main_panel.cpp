@@ -117,6 +117,8 @@ struct MainPanelState {
     bool hotkeySelectionsInitialized{};
     bool screenshotDestinationInitialized{};
     int screenshotDestination{};
+    bool traySettingsInitialized{};
+    bool closeToTray{true};
     int gifFpsIndex{2};
     int gifHeightIndex{2};
     int gifColorIndex{3};
@@ -147,6 +149,7 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
                                    const RegionSelectionUiState& regionSelection,
                                    const DisplayUiState& display,
                                    const ScreenshotUiState& screenshot,
+                                   const TrayUiState& tray,
                                    CaptureTargetPicker& picker, WindowsGraphicsCapture& capture,
                                    ID3D11Device* device) {
     MainPanelCommand command{};
@@ -278,6 +281,26 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     }
 
     if (panel.activeTab == 3) {
+    ImGui::Spacing();
+    ImGui::SeparatorText("Background");
+    if (!panel.traySettingsInitialized) {
+        panel.closeToTray = tray.closeToTray;
+        panel.traySettingsInitialized = true;
+    } else if (panel.closeToTray != tray.closeToTray) {
+        panel.closeToTray = tray.closeToTray;
+    }
+    if (!tray.available) ImGui::BeginDisabled();
+    if (ImGui::Checkbox("Keep running when the window is closed", &panel.closeToTray)) {
+        command.applyCloseToTray = true;
+        command.closeToTray = panel.closeToTray;
+    }
+    ExplainLastItem("Keep global shortcuts available from the notification area after closing the main window.",
+                    !tray.available);
+    if (!tray.available) ImGui::EndDisabled();
+    if (!tray.status.empty()) {
+        ImGui::TextWrapped("%.*s", static_cast<int>(tray.status.size()), tray.status.data());
+    }
+
     ImGui::Spacing();
     ImGui::SeparatorText("Target border");
     if (!panel.borderSettingsInitialized) {

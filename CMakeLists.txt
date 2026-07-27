@@ -61,6 +61,7 @@ if(OPENCAPTURE_BUILD_APP)
         platform/capture_target_overlay.cpp
         platform/capture_target_picker.cpp
         platform/global_hotkeys.cpp
+        platform/system_tray.cpp
         platform/windows_graphics_capture.cpp
         platform/win32_d3d11_app.cpp
         ui/main_panel.cpp
