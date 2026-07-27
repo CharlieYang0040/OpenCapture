@@ -355,7 +355,9 @@ bool Win32D3D11App::Initialize(HINSTANCE instance, int showCommand) {
     }
     globalHotkeys_.Initialize(window_);
     if (systemTray_.Initialize(window_, instance_)) {
-        trayStatus_ = "OpenCapture remains available in the notification area.";
+        trayStatus_ = closeToTray_
+            ? "OpenCapture remains available in the notification area after closing."
+            : "Closing the window exits OpenCapture. Enable background mode to keep it in the notification area.";
     } else {
         trayStatus_ = "Notification area icon unavailable; closing the window exits the app.";
     }

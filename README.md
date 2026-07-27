@@ -60,8 +60,9 @@ OpenCapture는 Windows 10/11을 위한 네이티브 화면 캡처 애플리케�
 - 단축키 캡처 결과를 클립보드, PNG 또는 둘 다로 선택하는 스크린샷 설정
 - 영구 Region과 프리셋을 바꾸지 않는 `Ctrl+Shift+F8` Quick Capture
 - Region 선택 중 메인 창 자동 숨김과 Capture·Video·GIF·Settings 탭 UI
-- 창을 닫아도 전역 단축키가 유지되는 알림 영역 상주와 설정 가능한 종료 동작
+- 사용자가 직접 켠 경우에만 창을 닫아도 전역 단축키가 유지되는 알림 영역 상주
 - 알림 영역의 앱 열기, Quick Capture, 현재 녹화 중지 및 완전 종료 메뉴
+- 신규 사용자는 창을 닫으면 완전히 종료되는 회사 PC 친화적 기본 정책
 - drop-oldest 정책을 사용하는 제한 큐
 - 핵심 모델 단위 테스트와 Windows GitHub Actions CI
 
@@ -73,6 +74,17 @@ OpenCapture는 Windows 10/11을 위한 네이티브 화면 캡처 애플리케�
 - QSV/AMF 실기 검증과 장시간 성능 시험
 
 전체 개발 순서와 성능 기준은 [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md)에서 확인할 수 있습니다.
+
+## 회사 PC 보안 관련 동작
+
+OpenCapture는 Windows 서비스, 예약 작업, 시작 프로그램을 설치하지 않으며 관리자 권한,
+프로세스 주입, DLL 주입 또는 게임 후킹을 사용하지 않습니다. 사용자가 직접 실행한 프로세스
+안에서 Windows Graphics Capture, 전역 단축키 및 클립보드 API를 사용합니다.
+
+신규 사용자는 메인 창을 닫으면 앱이 완전히 종료됩니다. 백그라운드 전역 단축키가 필요한
+사용자만 Settings의 `Keep running when the window is closed`를 직접 켤 수 있으며,
+트레이 메뉴의 `Exit OpenCapture`로 완전히 종료할 수 있습니다. 회사 정책이 화면·오디오
+캡처를 제한한다면 서명 여부와 관계없이 보안팀의 사전 승인을 받아야 합니다.
 
 ## 개발 환경 요구 사항
 

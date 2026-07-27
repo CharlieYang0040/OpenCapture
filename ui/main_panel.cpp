@@ -111,14 +111,13 @@ struct MainPanelState {
     int quality{1};
     bool systemAudio{true};
     bool microphone{};
-    bool cursor{true};
     std::array<int, 4> modifierSelections{};
     std::array<int, 4> keySelections{};
     bool hotkeySelectionsInitialized{};
     bool screenshotDestinationInitialized{};
     int screenshotDestination{};
     bool traySettingsInitialized{};
-    bool closeToTray{true};
+    bool closeToTray{};
     int gifFpsIndex{2};
     int gifHeightIndex{2};
     int gifColorIndex{3};
@@ -499,8 +498,13 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     ImGui::Checkbox("Microphone", &panel.microphone);
     ExplainLastItem("Include the default microphone in video recordings. GIF never includes audio.");
     ImGui::SameLine();
-    ImGui::Checkbox("Cursor", &panel.cursor);
-    ExplainLastItem("Include the mouse pointer when supported by the active capture path.");
+    bool cursorIncluded = true;
+    ImGui::BeginDisabled();
+    ImGui::Checkbox("Cursor (always included)", &cursorIncluded);
+    ImGui::EndDisabled();
+    ExplainLastItem(
+        "Windows Graphics Capture currently includes the pointer. On/off control will be enabled only after the capture engine supports and verifies it.",
+        true);
     command.systemAudio = panel.systemAudio;
     command.microphone = panel.microphone;
     if (!audioStatus.empty()) {

@@ -58,7 +58,7 @@ struct ScreenshotUiState {
 
 struct TrayUiState {
     bool available{};
-    bool closeToTray{true};
+    bool closeToTray{};
     std::string_view status;
 };
 
@@ -113,7 +113,7 @@ struct MainPanelCommand {
     int regionOutsideDimmingPercent{30};
     int uiScalePercent{100};
     ScreenshotDestination screenshotShortcutDestination{ScreenshotDestination::Clipboard};
-    bool closeToTray{true};
+    bool closeToTray{};
     int framesPerSecond{60};
     int quality{1};
     int gifFramesPerSecond{12};

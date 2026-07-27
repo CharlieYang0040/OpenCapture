@@ -60,8 +60,9 @@ Implemented:
 - Configurable shortcut output: clipboard, PNG file, or both
 - `Ctrl+Shift+F8` Quick Capture without changing the persistent region or presets
 - Automatic main-window hiding during region selection and Capture/Video/GIF/Settings tabs
-- Notification-area background operation with configurable close behavior
+- Opt-in notification-area background operation with configurable close behavior
 - Notification-area actions for opening the app, Quick Capture, stopping a recording, and fully exiting
+- Company-PC-friendly default that fully exits when a new user closes the window
 - Bounded queue with a drop-oldest overload policy
 - Core unit tests and Windows GitHub Actions CI
 
@@ -73,6 +74,17 @@ Not implemented yet:
 - QSV/AMF hardware validation and long-running performance tests
 
 See [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md) for the roadmap and performance acceptance criteria.
+
+## Company-PC security behavior
+
+OpenCapture does not install a Windows service, scheduled task, startup entry, or process/DLL
+injection, and it does not hook games or request administrator rights. It uses Windows Graphics
+Capture, global shortcuts, and clipboard APIs inside the process explicitly launched by the user.
+
+For new users, closing the main window fully exits the app. Users who need background shortcuts
+can explicitly enable `Keep running when the window is closed` in Settings and can always fully
+exit through `Exit OpenCapture` in the notification-area menu. A company security policy may still
+require prior approval for screen or audio capture regardless of code-signing status.
 
 ## Requirements
 

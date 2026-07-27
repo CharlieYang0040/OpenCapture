@@ -183,7 +183,7 @@ private:
     SystemTray systemTray_;
     std::uint32_t pendingHotkeyActions_{};
     bool regionSelectionActive_{};
-    bool closeToTray_{true};
+    bool closeToTray_{};
     bool exitRequested_{};
     bool automatedMode_{};
     std::string trayStatus_;
