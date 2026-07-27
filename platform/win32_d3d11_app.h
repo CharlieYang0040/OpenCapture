@@ -14,6 +14,7 @@
 #include "encoder/ffmpeg_muxer.h"
 #include "encoder/ffmpeg_gif_converter.h"
 #include "core/session_state.h"
+#include "core/ui_scale.h"
 #include "platform/capture_target_overlay.h"
 #include "platform/capture_target_picker.h"
 #include "platform/global_hotkeys.h"
@@ -81,6 +82,11 @@ private:
     bool RunEncoderFallbackSmoke();
     bool RunScreenshotSmoke();
     void HandleHotkey(HotkeyAction action);
+    void LoadUiScaleSettings();
+    bool SaveUiScaleSettings() const;
+    void ApplyUiScale();
+    bool SetUiScalePercent(int percent);
+    void RefreshWindowDpi();
     void Render();
     void Shutdown();
 
@@ -155,6 +161,11 @@ private:
     GlobalHotkeys globalHotkeys_;
     std::uint32_t pendingHotkeyActions_{};
     bool regionSelectionActive_{};
+    UINT windowDpi_{96};
+    int uiScalePercent_{100};
+    float effectiveUiScale_{1.0F};
+    bool uiScaleDirty_{true};
+    std::string uiScaleStatus_;
     WindowsGraphicsCapture capture_;
     bool captureSmokeMode_{};
     bool gpuCropSmokeMode_{};

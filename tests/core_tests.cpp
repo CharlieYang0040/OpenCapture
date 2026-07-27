@@ -1,6 +1,7 @@
 #include "core/bounded_queue.h"
 #include "core/capture_target.h"
 #include "core/session_state.h"
+#include "core/ui_scale.h"
 
 #include <iostream>
 #include <string>
@@ -136,6 +137,15 @@ void TestOutputSizeNormalization() {
           "1080p30 GIF is shortened by the safe pixel budget");
 }
 
+void TestUiScale() {
+    Check(opencapture::ClampUiScalePercent(50) == 75, "UI scale clamps low values");
+    Check(opencapture::ClampUiScalePercent(250) == 200, "UI scale clamps high values");
+    Check(opencapture::ComputeUiScale(96, 100) == 1.0F, "96 DPI keeps the base UI scale");
+    Check(opencapture::ComputeUiScale(144, 100) == 1.5F, "144 DPI produces 150 percent UI");
+    Check(opencapture::ComputeUiScale(192, 125) == 2.5F,
+          "user UI scale multiplies the Windows monitor scale");
+}
+
 } // namespace
 
 int main() {
@@ -147,6 +157,7 @@ int main() {
     TestLocalRegionConversion();
     TestRegionSelectionBounds();
     TestOutputSizeNormalization();
+    TestUiScale();
     if (failures == 0) std::cout << "All OpenCapture core tests passed.\n";
     return failures == 0 ? 0 : 1;
 }

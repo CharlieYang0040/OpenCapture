@@ -15,6 +15,7 @@ extern "C" {
 
 #include <array>
 #include <algorithm>
+#include <cmath>
 #include <cwchar>
 #include <filesystem>
 #include <fstream>
@@ -109,6 +110,12 @@ std::filesystem::path OutputSettingsPath() {
     return error ? std::filesystem::path{} : directory / L"output_directory.txt";
 }
 
+std::filesystem::path UiScaleSettingsPath() {
+    auto path = OutputSettingsPath();
+    if (!path.empty()) path.replace_filename(L"ui_settings.txt");
+    return path;
+}
+
 std::filesystem::path DefaultOutputDirectory() {
     PWSTR videos{};
     if (FAILED(SHGetKnownFolderPath(FOLDERID_Videos, KF_FLAG_CREATE, nullptr, &videos))) return {};
@@ -121,8 +128,74 @@ std::filesystem::path DefaultOutputDirectory() {
 
 Win32D3D11App::~Win32D3D11App() { Shutdown(); }
 
+void Win32D3D11App::LoadUiScaleSettings() {
+    std::ifstream input(UiScaleSettingsPath());
+    if (!input) return;
+    std::string line;
+    int percent = uiScalePercent_;
+    while (std::getline(input, line)) {
+        if (line.rfind("ui_scale_percent=", 0) == 0) {
+            std::istringstream value(line.substr(17));
+            value >> percent;
+        }
+    }
+    uiScalePercent_ = ClampUiScalePercent(percent);
+}
+
+bool Win32D3D11App::SaveUiScaleSettings() const {
+    const auto path = UiScaleSettingsPath();
+    if (path.empty()) return false;
+    const std::filesystem::path temporary(path.wstring() + L".tmp");
+    {
+        std::ofstream output(temporary, std::ios::trunc);
+        if (!output) return false;
+        output << "ui_scale_percent=" << uiScalePercent_ << '\n';
+        if (!output) return false;
+    }
+    return MoveFileExW(temporary.c_str(), path.c_str(),
+                       MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
+}
+
+void Win32D3D11App::ApplyUiScale() {
+    if (!ImGui::GetCurrentContext()) return;
+    effectiveUiScale_ = ComputeUiScale(windowDpi_, uiScalePercent_);
+    ImGuiStyle style{};
+    ImGui::StyleColorsDark(&style);
+    style.ScaleAllSizes(effectiveUiScale_);
+    const float windowsScale = static_cast<float>(windowDpi_ == 0 ? 96U : windowDpi_) / 96.0F;
+    style.FontScaleDpi = windowsScale;
+    style.FontScaleMain = effectiveUiScale_ / windowsScale;
+    ImGui::GetStyle() = style;
+    uiScaleDirty_ = false;
+}
+
+bool Win32D3D11App::SetUiScalePercent(int percent) {
+    const int previous = uiScalePercent_;
+    uiScalePercent_ = ClampUiScalePercent(percent);
+    uiScaleDirty_ = true;
+    if (!SaveUiScaleSettings()) {
+        uiScalePercent_ = previous;
+        uiScaleDirty_ = true;
+        uiScaleStatus_ = "UI scale could not be saved.";
+        return false;
+    }
+    uiScaleStatus_ = "UI scale saved. Windows monitor scaling remains automatic.";
+    return true;
+}
+
+void Win32D3D11App::RefreshWindowDpi() {
+    if (!window_) return;
+    const UINT dpi = GetDpiForWindow(window_);
+    if (dpi != 0 && dpi != windowDpi_) {
+        windowDpi_ = dpi;
+        uiScaleDirty_ = true;
+        uiScaleStatus_ = "Monitor DPI changed; UI scale updated automatically.";
+    }
+}
+
 bool Win32D3D11App::Initialize(HINSTANCE instance, int showCommand) {
     instance_ = instance;
+    LoadUiScaleSettings();
     winrt::init_apartment(winrt::apartment_type::single_threaded);
     captureSmokeMode_ = std::wcsstr(GetCommandLineW(), L"--wgc-smoke") != nullptr;
     gpuCropSmokeMode_ = std::wcsstr(GetCommandLineW(), L"--gpu-crop-smoke") != nullptr;
@@ -151,7 +224,24 @@ bool Win32D3D11App::Initialize(HINSTANCE instance, int showCommand) {
     gpuNv12SmokeMode_ = gpuNv12SmokeMode_ || nvencSmokeMode_;
     gpuCropSmokeMode_ = gpuCropSmokeMode_ || gpuNv12SmokeMode_;
     captureSmokeMode_ = captureSmokeMode_ || gpuCropSmokeMode_;
-    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    ImGui_ImplWin32_EnableDpiAwareness();
+    const HMONITOR initialMonitor = MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
+    const float initialDpiScale = ImGui_ImplWin32_GetDpiScaleForMonitor(initialMonitor);
+    const float initialUiScale = ComputeUiScale(
+        static_cast<unsigned>(std::lround(initialDpiScale * 96.0F)), uiScalePercent_);
+    MONITORINFO initialMonitorInfo{};
+    initialMonitorInfo.cbSize = sizeof(initialMonitorInfo);
+    const bool hasMonitorInfo = GetMonitorInfoW(initialMonitor, &initialMonitorInfo) != FALSE;
+    const int maximumWidth = hasMonitorInfo
+        ? static_cast<int>((initialMonitorInfo.rcWork.right - initialMonitorInfo.rcWork.left) * 0.9F)
+        : static_cast<int>(std::lround(860.0F * initialDpiScale));
+    const int maximumHeight = hasMonitorInfo
+        ? static_cast<int>((initialMonitorInfo.rcWork.bottom - initialMonitorInfo.rcWork.top) * 0.9F)
+        : static_cast<int>(std::lround(800.0F * initialDpiScale));
+    const int initialWidth = std::min(
+        static_cast<int>(std::lround(860.0F * initialUiScale)), maximumWidth);
+    const int initialHeight = std::min(
+        static_cast<int>(std::lround(800.0F * initialUiScale)), maximumHeight);
 
     WNDCLASSEXW windowClass{sizeof(WNDCLASSEXW)};
     windowClass.style = CS_CLASSDC;
@@ -162,8 +252,11 @@ bool Win32D3D11App::Initialize(HINSTANCE instance, int showCommand) {
     if (!RegisterClassExW(&windowClass)) return false;
 
     window_ = CreateWindowW(kWindowClass, L"OpenCapture", WS_OVERLAPPEDWINDOW,
-                            CW_USEDEFAULT, CW_USEDEFAULT, 860, 800, nullptr, nullptr, instance_, this);
+                            CW_USEDEFAULT, CW_USEDEFAULT, initialWidth, initialHeight,
+                            nullptr, nullptr, instance_, this);
     if (!window_ || !CreateDeviceAndSwapChain() || !frameProcessor_.Initialize(device_.Get(), context_.Get())) return false;
+    const UINT createdWindowDpi = GetDpiForWindow(window_);
+    windowDpi_ = createdWindowDpi == 0 ? 96 : createdWindowDpi;
     if (!targetOverlay_.Initialize(instance_)) {
         targetOverlayStatus_ = targetOverlay_.LastError();
     } else if (!targetOverlay_.CaptureExclusionAvailable()) {
@@ -174,9 +267,9 @@ bool Win32D3D11App::Initialize(HINSTANCE instance, int showCommand) {
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    ImGui::StyleColorsDark();
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr;
+    ApplyUiScale();
 
     if (!ImGui_ImplWin32_Init(window_) || !ImGui_ImplDX11_Init(device_.Get(), context_.Get())) return false;
 
@@ -1554,6 +1647,8 @@ void Win32D3D11App::Render() {
     ProcessCaptureFrames();
     PumpRecordingClock();
     PumpRecordingAudio();
+    RefreshWindowDpi();
+    if (uiScaleDirty_) ApplyUiScale();
     ImGui_ImplDX11_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
@@ -1595,6 +1690,12 @@ void Win32D3D11App::Render() {
     const RegionSelectionUiState regionSelectionUi{
         targetPicker_.SelectionSettings().outsideDimmingPercent,
     };
+    const DisplayUiState displayUi{
+        static_cast<int>(std::lround(static_cast<double>(windowDpi_) * 100.0 / 96.0)),
+        uiScalePercent_,
+        static_cast<int>(std::lround(effectiveUiScale_ * 100.0F)),
+        uiScaleStatus_,
+    };
     std::string overlayStatus = targetOverlayStatus_;
     const auto borderlessStatus = capture_.BorderlessStatus();
     if (!borderlessStatus.empty()) {
@@ -1605,8 +1706,14 @@ void Win32D3D11App::Render() {
                                          screenshotStatus_, overlayStatus, audioStatus_, recoveryStatus_, remuxStatus_, gifStatus_,
                                          outputDirectoryUtf8_,
                                          recoverableRecordings_,
-                                         recordingUi, hotkeyUi, borderUi, regionSelectionUi,
+                                         recordingUi, hotkeyUi, borderUi, regionSelectionUi, displayUi,
                                          targetPicker_, capture_, device_.Get());
+    if (command.applyUiScale) {
+        SetUiScalePercent(command.uiScalePercent);
+    }
+    if (command.resetUiScale) {
+        SetUiScalePercent(100);
+    }
     if (command.selectRegion) {
         regionSelectionActive_ = true;
         pendingHotkeyActions_ = 0;
@@ -1819,6 +1926,24 @@ LRESULT CALLBACK Win32D3D11App::WindowProc(HWND window, UINT message, WPARAM wPa
             return 0;
         }
         break;
+    }
+    case WM_DPICHANGED: {
+        auto* app = reinterpret_cast<Win32D3D11App*>(
+            GetWindowLongPtrW(window, GWLP_USERDATA));
+        if (app) {
+            const UINT dpi = LOWORD(wParam);
+            if (dpi != 0) app->windowDpi_ = dpi;
+            app->uiScaleDirty_ = true;
+            app->uiScaleStatus_ = "Monitor DPI changed; UI scale updated automatically.";
+        }
+        const auto* suggested = reinterpret_cast<const RECT*>(lParam);
+        if (suggested) {
+            SetWindowPos(window, nullptr, suggested->left, suggested->top,
+                         suggested->right - suggested->left,
+                         suggested->bottom - suggested->top,
+                         SWP_NOACTIVATE | SWP_NOZORDER);
+        }
+        return 0;
     }
     case WM_SIZE:
         if (wParam != SIZE_MINIMIZED) {

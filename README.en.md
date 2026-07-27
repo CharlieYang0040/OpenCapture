@@ -56,6 +56,7 @@ Implemented:
 - Persistent target-border visibility, 1-12 px thickness, and 20-100% opacity controls
 - Configurable capture, video, and GIF global shortcuts with conflict and repeat protection
 - Result-oriented tooltips for primary actions and performance/size controls
+- Adaptive UI that follows 100-200% monitor DPI with a persistent 75-200% user adjustment
 - Bounded queue with a drop-oldest overload policy
 - Core unit tests and Windows GitHub Actions CI
 

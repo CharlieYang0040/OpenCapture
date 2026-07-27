@@ -60,6 +60,13 @@ struct RegionSelectionUiState {
     int outsideDimmingPercent{30};
 };
 
+struct DisplayUiState {
+    int windowsDpiPercent{100};
+    int userScalePercent{100};
+    int effectiveScalePercent{100};
+    std::string_view status;
+};
+
 struct MainPanelCommand {
     bool selectRegion{};
     bool chooseOutputDirectory{};
@@ -83,10 +90,13 @@ struct MainPanelCommand {
     bool resetBorderSettings{};
     bool applyRegionSelectionSettings{};
     bool resetRegionSelectionSettings{};
+    bool applyUiScale{};
+    bool resetUiScale{};
     bool borderVisible{true};
     int borderThickness{3};
     int borderOpacityPercent{85};
     int regionOutsideDimmingPercent{30};
+    int uiScalePercent{100};
     int framesPerSecond{60};
     int quality{1};
     int gifFramesPerSecond{12};
@@ -115,6 +125,7 @@ public:
                                   const HotkeyUiState& hotkeys,
                                   const BorderUiState& border,
                                   const RegionSelectionUiState& regionSelection,
+                                  const DisplayUiState& display,
                                   CaptureTargetPicker& picker, WindowsGraphicsCapture& capture,
                                   ID3D11Device* device);
 };

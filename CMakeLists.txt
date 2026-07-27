@@ -20,6 +20,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_library(opencapture_core STATIC
     core/capture_target.cpp
     core/session_state.cpp
+    core/ui_scale.cpp
 )
 target_include_directories(opencapture_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(opencapture_core PUBLIC UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)

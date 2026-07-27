@@ -107,6 +107,7 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
                                    const HotkeyUiState& hotkeys,
                                    const BorderUiState& border,
                                    const RegionSelectionUiState& regionSelection,
+                                   const DisplayUiState& display,
                                    CaptureTargetPicker& picker, WindowsGraphicsCapture& capture,
                                    ID3D11Device* device) {
     MainPanelCommand command{};
@@ -121,6 +122,33 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
 
     ImGui::TextUnformatted("OpenCapture");
     ImGui::Separator();
+
+    static bool displaySettingsInitialized = false;
+    static int uiScalePercent = 100;
+    if (!displaySettingsInitialized) {
+        uiScalePercent = display.userScalePercent;
+        displaySettingsInitialized = true;
+    }
+    ImGui::SeparatorText("Display");
+    ImGui::Text("Windows scaling: %d%% | Effective UI: %d%%",
+                display.windowsDpiPercent, display.effectiveScalePercent);
+    if (!display.status.empty()) {
+        ImGui::TextWrapped("%.*s", static_cast<int>(display.status.size()), display.status.data());
+    }
+    ImGui::SliderInt("Additional UI scale", &uiScalePercent, 75, 200, "%d%%");
+    ExplainLastItem("Multiplies the Windows monitor scaling. Use 100% for automatic sizing.");
+    if (ImGui::SmallButton("Apply UI scale")) {
+        command.applyUiScale = true;
+        command.uiScalePercent = uiScalePercent;
+    }
+    ExplainLastItem("Apply immediately and save the UI size for the next launch.");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Reset UI scale")) {
+        uiScalePercent = 100;
+        command.resetUiScale = true;
+    }
+    ExplainLastItem("Follow Windows display scaling without an additional adjustment.");
+    ImGui::Spacing();
 
     static int selectedEncoder = 0;
     if (selectedEncoder > static_cast<int>(encoderChoices.size())) selectedEncoder = 0;
