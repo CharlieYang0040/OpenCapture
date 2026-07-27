@@ -89,6 +89,44 @@ void ExplainLastItem(const char* text, bool allowWhenDisabled = false) {
     if (ImGui::IsItemHovered(flags)) ImGui::SetTooltip("%s", text);
 }
 
+struct MainPanelState {
+    int activeTab{};
+    bool displaySettingsInitialized{};
+    int uiScalePercent{100};
+    int selectedEncoder{};
+    int targetType{-1};
+    bool borderSettingsInitialized{};
+    bool borderVisible{true};
+    int borderThickness{3};
+    int borderOpacity{85};
+    bool regionSelectionSettingsInitialized{};
+    int outsideDimmingPercent{30};
+    int selectedPreset{-1};
+    std::array<char, 128> renameName{};
+    std::array<char, 128> presetName{};
+    int presetAnchor{static_cast<int>(RegionAnchorType::VirtualDesktop)};
+    int anchorWindow{};
+    int format{};
+    int fps{60};
+    int quality{1};
+    bool systemAudio{true};
+    bool microphone{};
+    bool cursor{true};
+    std::array<int, 4> modifierSelections{};
+    std::array<int, 4> keySelections{};
+    bool hotkeySelectionsInitialized{};
+    bool screenshotDestinationInitialized{};
+    int screenshotDestination{};
+    int gifFpsIndex{2};
+    int gifHeightIndex{2};
+    int gifColorIndex{3};
+};
+
+MainPanelState& PanelState() {
+    static MainPanelState state;
+    return state;
+}
+
 } // namespace
 
 MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmpegVersion,
@@ -108,9 +146,11 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
                                    const BorderUiState& border,
                                    const RegionSelectionUiState& regionSelection,
                                    const DisplayUiState& display,
+                                   const ScreenshotUiState& screenshot,
                                    CaptureTargetPicker& picker, WindowsGraphicsCapture& capture,
                                    ID3D11Device* device) {
     MainPanelCommand command{};
+    auto& panel = PanelState();
     const bool mediaBusy = recording.mediaJobActive;
     const bool outputBusy = recording.active || mediaBusy;
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -121,70 +161,109 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     ImGui::Begin("OpenCapture", nullptr, flags);
 
     ImGui::TextUnformatted("OpenCapture");
+    ImGui::SameLine();
+    if (ImGui::Button("Quick Capture")) command.quickCapture = true;
+    ExplainLastItem("Temporarily select an area and capture it without changing the saved target.");
+    ImGui::TextWrapped("Target: %s", picker.SelectedLabel().c_str());
+    ImGui::TextWrapped("Output: %.*s",
+                       static_cast<int>(outputDirectory.size()), outputDirectory.data());
+    if (recording.active) {
+        ImGui::SameLine();
+        if (ImGui::Button(recording.paused ? "Resume" : "Pause")) {
+            if (recording.paused) command.resumeRecording = true;
+            else command.pauseRecording = true;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(recording.gif ? "Stop GIF" : "Stop video")) {
+            command.stopRecording = true;
+        }
+    }
     ImGui::Separator();
 
-    static bool displaySettingsInitialized = false;
-    static int uiScalePercent = 100;
-    if (!displaySettingsInitialized) {
-        uiScalePercent = display.userScalePercent;
-        displaySettingsInitialized = true;
+    if (ImGui::BeginTabBar("MainSections")) {
+        if (ImGui::BeginTabItem("Capture")) {
+            panel.activeTab = 0;
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Video")) {
+            panel.activeTab = 1;
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("GIF")) {
+            panel.activeTab = 2;
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Settings")) {
+            panel.activeTab = 3;
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
     }
+
+    if (!panel.displaySettingsInitialized) {
+        panel.uiScalePercent = display.userScalePercent;
+        panel.displaySettingsInitialized = true;
+    }
+    if (panel.activeTab == 3) {
     ImGui::SeparatorText("Display");
     ImGui::Text("Windows scaling: %d%% | Effective UI: %d%%",
                 display.windowsDpiPercent, display.effectiveScalePercent);
     if (!display.status.empty()) {
         ImGui::TextWrapped("%.*s", static_cast<int>(display.status.size()), display.status.data());
     }
-    ImGui::SliderInt("Additional UI scale", &uiScalePercent, 75, 200, "%d%%");
+    ImGui::SliderInt("Additional UI scale", &panel.uiScalePercent, 75, 200, "%d%%");
     ExplainLastItem("Multiplies the Windows monitor scaling. Use 100% for automatic sizing.");
     if (ImGui::SmallButton("Apply UI scale")) {
         command.applyUiScale = true;
-        command.uiScalePercent = uiScalePercent;
+        command.uiScalePercent = panel.uiScalePercent;
     }
     ExplainLastItem("Apply immediately and save the UI size for the next launch.");
     ImGui::SameLine();
     if (ImGui::SmallButton("Reset UI scale")) {
-        uiScalePercent = 100;
+        panel.uiScalePercent = 100;
         command.resetUiScale = true;
     }
     ExplainLastItem("Follow Windows display scaling without an additional adjustment.");
     ImGui::Spacing();
+    }
 
-    static int selectedEncoder = 0;
-    if (selectedEncoder > static_cast<int>(encoderChoices.size())) selectedEncoder = 0;
+    if (panel.selectedEncoder > static_cast<int>(encoderChoices.size())) panel.selectedEncoder = 0;
     const char* encoderPreview = "Auto (recommended)";
-    if (selectedEncoder > 0) encoderPreview = encoderChoices[static_cast<std::size_t>(selectedEncoder - 1)].displayName.data();
+    if (panel.selectedEncoder > 0) encoderPreview = encoderChoices[static_cast<std::size_t>(panel.selectedEncoder - 1)].displayName.data();
+    if (panel.activeTab == 1 || panel.activeTab == 2) {
     ImGui::TextUnformatted("Video encoder");
     ExplainLastItem("Auto selects the best available hardware encoder. A manual choice is useful for compatibility testing.");
     ImGui::SameLine();
     if (ImGui::BeginCombo("##VideoEncoder", encoderPreview)) {
-        if (ImGui::Selectable("Auto (recommended)", selectedEncoder == 0)) selectedEncoder = 0;
+        if (ImGui::Selectable("Auto (recommended)", panel.selectedEncoder == 0)) panel.selectedEncoder = 0;
         for (std::size_t index = 0; index < encoderChoices.size(); ++index) {
             const auto& choice = encoderChoices[index];
             if (!choice.usable) ImGui::BeginDisabled();
-            const bool selected = selectedEncoder == static_cast<int>(index + 1);
+            const bool selected = panel.selectedEncoder == static_cast<int>(index + 1);
             if (ImGui::Selectable(choice.displayName.data(), selected) && choice.usable) {
-                selectedEncoder = static_cast<int>(index + 1);
+                panel.selectedEncoder = static_cast<int>(index + 1);
             }
             if (ImGui::IsItemHovered() && !choice.detail.empty()) ImGui::SetTooltip("%.*s", static_cast<int>(choice.detail.size()), choice.detail.data());
             if (!choice.usable) ImGui::EndDisabled();
         }
         ImGui::EndCombo();
     }
+    }
 
-    static int targetType = static_cast<int>(picker.Selected().type);
+    if (panel.activeTab == 0) {
+    if (panel.targetType < 0) panel.targetType = static_cast<int>(picker.Selected().type);
     ImGui::TextUnformatted("Target");
     ImGui::SameLine();
-    ImGui::RadioButton("Window", &targetType, 0);
+    ImGui::RadioButton("Window", &panel.targetType, 0);
     ExplainLastItem("Capture one window and keep the target border attached while it moves or resizes.");
     ImGui::SameLine();
-    ImGui::RadioButton("Region", &targetType, 1);
+    ImGui::RadioButton("Region", &panel.targetType, 1);
     ExplainLastItem("Capture only a rectangular desktop area. The selected area remains outlined.");
     ImGui::SameLine();
-    ImGui::RadioButton("Monitor", &targetType, 2);
+    ImGui::RadioButton("Monitor", &panel.targetType, 2);
     ExplainLastItem("Capture one entire monitor.");
     if (ImGui::Button("Select capture target", ImVec2(220.0F, 0.0F))) {
-        if (targetType == static_cast<int>(CaptureTargetType::Region)) command.selectRegion = true;
+        if (panel.targetType == static_cast<int>(CaptureTargetType::Region)) command.selectRegion = true;
         else { picker.Refresh(); ImGui::OpenPopup("Capture target"); }
     }
     ExplainLastItem("Choose the window, region, or monitor used by screenshots, video, and GIF recording.");
@@ -196,83 +275,80 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
         ImGui::TextColored(ImVec4(1.0F, 0.75F, 0.25F, 1.0F), "%.*s",
                            static_cast<int>(targetOverlayStatus.size()), targetOverlayStatus.data());
     }
+    }
 
+    if (panel.activeTab == 3) {
     ImGui::Spacing();
     ImGui::SeparatorText("Target border");
-    static bool borderSettingsInitialized = false;
-    static bool borderVisible = true;
-    static int borderThickness = 3;
-    static int borderOpacity = 85;
-    if (!borderSettingsInitialized) {
-        borderVisible = border.visible;
-        borderThickness = border.thickness;
-        borderOpacity = border.opacityPercent;
-        borderSettingsInitialized = true;
+    if (!panel.borderSettingsInitialized) {
+        panel.borderVisible = border.visible;
+        panel.borderThickness = border.thickness;
+        panel.borderOpacity = border.opacityPercent;
+        panel.borderSettingsInitialized = true;
     }
-    ImGui::Checkbox("Show target border", &borderVisible);
+    ImGui::Checkbox("Show target border", &panel.borderVisible);
     ExplainLastItem("Show or hide the always-on-top border around the selected target.");
-    ImGui::SliderInt("Border thickness", &borderThickness, 1, 12, "%d px");
+    ImGui::SliderInt("Border thickness", &panel.borderThickness, 1, 12, "%d px");
     ExplainLastItem("Use a thin border when you want the target guide to stay unobtrusive.");
-    ImGui::SliderInt("Border opacity", &borderOpacity, 20, 100, "%d%%");
+    ImGui::SliderInt("Border opacity", &panel.borderOpacity, 20, 100, "%d%%");
     ExplainLastItem("Lower opacity makes the border less distracting while keeping the target visible.");
     if (ImGui::SmallButton("Apply border settings")) {
         command.applyBorderSettings = true;
-        command.borderVisible = borderVisible;
-        command.borderThickness = borderThickness;
-        command.borderOpacityPercent = borderOpacity;
+        command.borderVisible = panel.borderVisible;
+        command.borderThickness = panel.borderThickness;
+        command.borderOpacityPercent = panel.borderOpacity;
     }
     ExplainLastItem("Apply and save these settings for the next app launch.");
     ImGui::SameLine();
     if (ImGui::SmallButton("Reset border defaults")) {
-        borderVisible = true;
-        borderThickness = 3;
-        borderOpacity = 85;
+        panel.borderVisible = true;
+        panel.borderThickness = 3;
+        panel.borderOpacity = 85;
         command.resetBorderSettings = true;
     }
     ExplainLastItem("Restore visible, 3 px, and 85% opacity.");
 
     ImGui::Spacing();
     ImGui::SeparatorText("Region selection appearance");
-    static bool regionSelectionSettingsInitialized = false;
-    static int outsideDimmingPercent = 30;
-    if (!regionSelectionSettingsInitialized) {
-        outsideDimmingPercent = regionSelection.outsideDimmingPercent;
-        regionSelectionSettingsInitialized = true;
+    if (!panel.regionSelectionSettingsInitialized) {
+        panel.outsideDimmingPercent = regionSelection.outsideDimmingPercent;
+        panel.regionSelectionSettingsInitialized = true;
     }
-    ImGui::SliderInt("Selection outside dimming", &outsideDimmingPercent, 0, 70, "%d%%");
+    ImGui::SliderInt("Selection outside dimming", &panel.outsideDimmingPercent, 0, 70, "%d%%");
     ExplainLastItem("Dims only the area outside a region selection. The selected area stays clear.");
     if (ImGui::SmallButton("Apply selection appearance")) {
         command.applyRegionSelectionSettings = true;
-        command.regionOutsideDimmingPercent = outsideDimmingPercent;
+        command.regionOutsideDimmingPercent = panel.outsideDimmingPercent;
     }
     ExplainLastItem("Apply and save the region selection screen brightness.");
     ImGui::SameLine();
     if (ImGui::SmallButton("Reset selection appearance")) {
-        outsideDimmingPercent = 30;
+        panel.outsideDimmingPercent = 30;
         command.resetRegionSelectionSettings = true;
     }
     ExplainLastItem("Restore 30% outside dimming.");
+    }
 
-    static int selectedPreset = -1;
+    if (panel.activeTab == 0) {
     const auto& presets = picker.Presets();
-    const char* preview = selectedPreset >= 0 && selectedPreset < static_cast<int>(presets.size())
-        ? presets[static_cast<std::size_t>(selectedPreset)].name.c_str() : "Choose a saved region";
+    const char* preview = panel.selectedPreset >= 0 && panel.selectedPreset < static_cast<int>(presets.size())
+        ? presets[static_cast<std::size_t>(panel.selectedPreset)].name.c_str() : "Choose a saved region";
     ImGui::SetNextItemWidth(260.0F);
     if (ImGui::BeginCombo("Region preset", preview)) {
         for (std::size_t index = 0; index < presets.size(); ++index) {
-            const bool selected = selectedPreset == static_cast<int>(index);
+            const bool selected = panel.selectedPreset == static_cast<int>(index);
             const std::string label = presets[index].name +
                 (presets[index].anchorType == RegionAnchorType::WindowClient ? "  [Window]##" : "  [Desktop]##") +
                 presets[index].id;
-            if (ImGui::Selectable(label.c_str(), selected)) selectedPreset = static_cast<int>(index);
+            if (ImGui::Selectable(label.c_str(), selected)) panel.selectedPreset = static_cast<int>(index);
             if (selected) ImGui::SetItemDefaultFocus();
         }
         ImGui::EndCombo();
     }
     ImGui::SameLine();
-    if (ImGui::Button("Apply") && selectedPreset >= 0) {
-        if (picker.ApplyRegionPreset(static_cast<std::size_t>(selectedPreset))) {
-            targetType = static_cast<int>(CaptureTargetType::Region);
+    if (ImGui::Button("Apply") && panel.selectedPreset >= 0) {
+        if (picker.ApplyRegionPreset(static_cast<std::size_t>(panel.selectedPreset))) {
+            panel.targetType = static_cast<int>(CaptureTargetType::Region);
         }
     }
     ExplainLastItem("Immediately use the selected saved region as the current capture target.", true);
@@ -283,28 +359,28 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     }
     ExplainLastItem("Save the current region for repeated browser or application captures.");
     ImGui::SameLine();
-    if (ImGui::Button("Delete") && selectedPreset >= 0) {
-        if (picker.DeleteRegionPreset(static_cast<std::size_t>(selectedPreset))) selectedPreset = -1;
+    if (ImGui::Button("Delete") && panel.selectedPreset >= 0) {
+        if (picker.DeleteRegionPreset(static_cast<std::size_t>(panel.selectedPreset))) panel.selectedPreset = -1;
     }
     ExplainLastItem("Delete the selected saved region. This does not delete captured files.", true);
-    static char renameName[128]{};
-    if (selectedPreset >= 0) {
+    if (panel.selectedPreset >= 0) {
         if (ImGui::SmallButton("Rename")) {
-            std::snprintf(renameName, sizeof(renameName), "%s", presets[static_cast<std::size_t>(selectedPreset)].name.c_str());
+            std::snprintf(panel.renameName.data(), panel.renameName.size(), "%s",
+                          presets[static_cast<std::size_t>(panel.selectedPreset)].name.c_str());
             ImGui::OpenPopup("Rename region preset");
         }
         ImGui::SameLine();
-        if (ImGui::SmallButton("Duplicate") && picker.DuplicateRegionPreset(static_cast<std::size_t>(selectedPreset))) ++selectedPreset;
+        if (ImGui::SmallButton("Duplicate") && picker.DuplicateRegionPreset(static_cast<std::size_t>(panel.selectedPreset))) ++panel.selectedPreset;
         ImGui::SameLine();
-        if (ImGui::ArrowButton("preset-up", ImGuiDir_Up) && picker.MoveRegionPreset(static_cast<std::size_t>(selectedPreset), -1)) --selectedPreset;
+        if (ImGui::ArrowButton("preset-up", ImGuiDir_Up) && picker.MoveRegionPreset(static_cast<std::size_t>(panel.selectedPreset), -1)) --panel.selectedPreset;
         ImGui::SameLine();
-        if (ImGui::ArrowButton("preset-down", ImGuiDir_Down) && picker.MoveRegionPreset(static_cast<std::size_t>(selectedPreset), 1)) ++selectedPreset;
+        if (ImGui::ArrowButton("preset-down", ImGuiDir_Down) && picker.MoveRegionPreset(static_cast<std::size_t>(panel.selectedPreset), 1)) ++panel.selectedPreset;
     }
 
     if (ImGui::BeginPopupModal("Rename region preset", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::InputText("New name", renameName, sizeof(renameName));
-        if (ImGui::Button("Rename") && selectedPreset >= 0 &&
-            picker.RenameRegionPreset(static_cast<std::size_t>(selectedPreset), renameName)) {
+        ImGui::InputText("New name", panel.renameName.data(), panel.renameName.size());
+        if (ImGui::Button("Rename") && panel.selectedPreset >= 0 &&
+            picker.RenameRegionPreset(static_cast<std::size_t>(panel.selectedPreset), panel.renameName.data())) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
@@ -312,31 +388,28 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
         ImGui::EndPopup();
     }
 
-    static char presetName[128]{};
-    static int presetAnchor = static_cast<int>(RegionAnchorType::VirtualDesktop);
-    static int anchorWindow = 0;
     if (ImGui::BeginPopupModal("Save region preset", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::InputText("Name", presetName, sizeof(presetName));
-        ImGui::RadioButton("Desktop coordinates", &presetAnchor, static_cast<int>(RegionAnchorType::VirtualDesktop));
+        ImGui::InputText("Name", panel.presetName.data(), panel.presetName.size());
+        ImGui::RadioButton("Desktop coordinates", &panel.presetAnchor, static_cast<int>(RegionAnchorType::VirtualDesktop));
         ImGui::SameLine();
-        ImGui::RadioButton("Window-relative", &presetAnchor, static_cast<int>(RegionAnchorType::WindowClient));
-        if (presetAnchor == static_cast<int>(RegionAnchorType::WindowClient)) {
+        ImGui::RadioButton("Window-relative", &panel.presetAnchor, static_cast<int>(RegionAnchorType::WindowClient));
+        if (panel.presetAnchor == static_cast<int>(RegionAnchorType::WindowClient)) {
             const auto& windows = picker.Windows();
-            if (anchorWindow >= static_cast<int>(windows.size())) anchorWindow = 0;
-            const char* windowPreview = windows.empty() ? "No window available" : windows[static_cast<std::size_t>(anchorWindow)].title.c_str();
+            if (panel.anchorWindow >= static_cast<int>(windows.size())) panel.anchorWindow = 0;
+            const char* windowPreview = windows.empty() ? "No window available" : windows[static_cast<std::size_t>(panel.anchorWindow)].title.c_str();
             if (ImGui::BeginCombo("Anchor window", windowPreview)) {
                 for (std::size_t index = 0; index < windows.size(); ++index) {
                     const std::string label = windows[index].title + "  [" + windows[index].processName + "]##anchor" + std::to_string(index);
-                    if (ImGui::Selectable(label.c_str(), anchorWindow == static_cast<int>(index))) anchorWindow = static_cast<int>(index);
+                    if (ImGui::Selectable(label.c_str(), panel.anchorWindow == static_cast<int>(index))) panel.anchorWindow = static_cast<int>(index);
                 }
                 ImGui::EndCombo();
             }
         }
         if (ImGui::Button("Save")) {
-            if (picker.CreateRegionPreset(presetName, static_cast<RegionAnchorType>(presetAnchor),
-                                          static_cast<std::size_t>(anchorWindow))) {
-                selectedPreset = static_cast<int>(picker.Presets().size()) - 1;
-                presetName[0] = '\0';
+            if (picker.CreateRegionPreset(panel.presetName.data(), static_cast<RegionAnchorType>(panel.presetAnchor),
+                                          static_cast<std::size_t>(panel.anchorWindow))) {
+                panel.selectedPreset = static_cast<int>(picker.Presets().size()) - 1;
+                panel.presetName[0] = '\0';
                 ImGui::CloseCurrentPopup();
             }
         }
@@ -347,7 +420,7 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     if (!picker.LastError().empty()) ImGui::TextColored(ImVec4(1.0F, 0.4F, 0.35F, 1.0F), "%s", picker.LastError().c_str());
 
     if (ImGui::BeginPopupModal("Capture target", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        if (targetType == static_cast<int>(CaptureTargetType::Window)) {
+        if (panel.targetType == static_cast<int>(CaptureTargetType::Window)) {
             ImGui::TextUnformatted("Choose a visible top-level window");
             ImGui::BeginChild("windows", ImVec2(560.0F, 300.0F), true);
             const auto& windows = picker.Windows();
@@ -382,39 +455,42 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
         if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
+    }
 
-    static int format = 0;
-    static int fps = 60;
-    static int quality = 1;
     constexpr std::array formats{"MKV / H.264", "MP4 copy / H.264"};
     constexpr std::array qualities{"Performance", "Balanced", "Quality"};
-    ImGui::Combo("Format", &format, formats.data(), static_cast<int>(formats.size()));
+    if (panel.activeTab == 1) {
+    ImGui::Combo("Format", &panel.format, formats.data(), static_cast<int>(formats.size()));
     ExplainLastItem("MKV is written safely while recording. MP4 copy remuxes the completed MKV without re-encoding.");
-    ImGui::SliderInt("FPS", &fps, 15, 120);
+    ImGui::SliderInt("FPS", &panel.fps, 15, 120);
     ExplainLastItem("Higher FPS makes motion smoother but increases encoder load and file size.");
-    ImGui::Combo("Quality", &quality, qualities.data(), static_cast<int>(qualities.size()));
+    ImGui::Combo("Quality", &panel.quality, qualities.data(), static_cast<int>(qualities.size()));
     ExplainLastItem("Performance reduces recording overhead; Quality uses a higher bitrate and creates larger files.");
-    command.framesPerSecond = fps;
-    command.quality = quality;
-    command.remuxToMp4 = format == 1;
+    command.framesPerSecond = panel.fps;
+    command.quality = panel.quality;
+    command.remuxToMp4 = panel.format == 1;
 
-    static bool systemAudio = true;
-    static bool microphone = false;
-    static bool cursor = true;
-    ImGui::Checkbox("System audio", &systemAudio);
+    ImGui::Checkbox("System audio", &panel.systemAudio);
     ExplainLastItem("Include sound played by Windows applications in video recordings. GIF never includes audio.");
     ImGui::SameLine();
-    ImGui::Checkbox("Microphone", &microphone);
+    ImGui::Checkbox("Microphone", &panel.microphone);
     ExplainLastItem("Include the default microphone in video recordings. GIF never includes audio.");
     ImGui::SameLine();
-    ImGui::Checkbox("Cursor", &cursor);
+    ImGui::Checkbox("Cursor", &panel.cursor);
     ExplainLastItem("Include the mouse pointer when supported by the active capture path.");
-    command.systemAudio = systemAudio;
-    command.microphone = microphone;
+    command.systemAudio = panel.systemAudio;
+    command.microphone = panel.microphone;
     if (!audioStatus.empty()) {
         ImGui::TextWrapped("Audio: %.*s", static_cast<int>(audioStatus.size()), audioStatus.data());
     }
+    }
+    command.framesPerSecond = panel.fps;
+    command.quality = panel.quality;
+    command.remuxToMp4 = panel.format == 1;
+    command.systemAudio = panel.systemAudio;
+    command.microphone = panel.microphone;
 
+    if (panel.activeTab == 3) {
     ImGui::Spacing();
     ImGui::SeparatorText("Output");
     ImGui::TextWrapped("Screenshots, video recordings, and GIF files are saved in the same folder.");
@@ -450,9 +526,10 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     ImGui::SeparatorText("Global shortcuts");
     ImGui::TextWrapped("These shortcuts work while OpenCapture is in the background.");
     constexpr std::array hotkeyActionNames{
-        "Copy screenshot",
+        "Capture selected target",
         "Start / stop video",
         "Start / stop GIF",
+        "Quick Capture",
     };
     constexpr std::array modifierLabels{
         "Ctrl + Shift", "Ctrl + Alt", "Alt + Shift", "Ctrl + Alt + Shift",
@@ -471,52 +548,49 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
         VK_F1, VK_F2, VK_F3, VK_F4, VK_F5, VK_F6,
         VK_F7, VK_F8, VK_F9, VK_F10, VK_F11, VK_F12,
     };
-    static std::array<int, 3> modifierSelections{};
-    static std::array<int, 3> keySelections{};
-    static bool hotkeySelectionsInitialized = false;
-    if (!hotkeySelectionsInitialized) {
+    if (!panel.hotkeySelectionsInitialized) {
         for (std::size_t action = 0; action < hotkeyActionNames.size(); ++action) {
             const auto modifier = std::find(modifierValues.begin(), modifierValues.end(),
                                             hotkeys.modifiers[action]);
             const auto key = std::find(keyValues.begin(), keyValues.end(),
                                        hotkeys.virtualKeys[action]);
-            modifierSelections[action] = modifier == modifierValues.end()
+            panel.modifierSelections[action] = modifier == modifierValues.end()
                 ? 0 : static_cast<int>(std::distance(modifierValues.begin(), modifier));
-            keySelections[action] = key == keyValues.end()
+            panel.keySelections[action] = key == keyValues.end()
                 ? 0 : static_cast<int>(std::distance(keyValues.begin(), key));
         }
-        hotkeySelectionsInitialized = true;
+        panel.hotkeySelectionsInitialized = true;
     }
     for (std::size_t action = 0; action < hotkeyActionNames.size(); ++action) {
         ImGui::PushID(static_cast<int>(action));
         ImGui::Text("%s  (current: %s)", hotkeyActionNames[action],
                     hotkeys.labels[action].c_str());
         ImGui::SetNextItemWidth(150.0F);
-        ImGui::Combo("##Modifiers", &modifierSelections[action],
+        ImGui::Combo("##Modifiers", &panel.modifierSelections[action],
                      modifierLabels.data(), static_cast<int>(modifierLabels.size()));
         ExplainLastItem("Choose modifier keys. OpenCapture requires modifiers to avoid intercepting normal typing.");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(85.0F);
-        ImGui::Combo("##Key", &keySelections[action],
+        ImGui::Combo("##Key", &panel.keySelections[action],
                      keyLabels.data(), static_cast<int>(keyLabels.size()));
         ExplainLastItem("Choose a function key. Registration will fail safely if Windows or another app already uses it.");
         ImGui::SameLine();
         if (ImGui::SmallButton("Apply")) {
             command.changeHotkeyAction = static_cast<int>(action);
             command.hotkeyModifiers =
-                modifierValues[static_cast<std::size_t>(modifierSelections[action])];
+                modifierValues[static_cast<std::size_t>(panel.modifierSelections[action])];
             command.hotkeyVirtualKey =
-                keyValues[static_cast<std::size_t>(keySelections[action])];
+                keyValues[static_cast<std::size_t>(panel.keySelections[action])];
         }
         ExplainLastItem("Register this shortcut globally and save it for the next app launch.");
         ImGui::PopID();
     }
     if (ImGui::SmallButton("Restore default shortcuts")) {
         command.resetHotkeys = true;
-        modifierSelections = {0, 0, 0};
-        keySelections = {8, 9, 10};
+        panel.modifierSelections = {0, 0, 0, 0};
+        panel.keySelections = {8, 9, 10, 7};
     }
-    ExplainLastItem("Restore Ctrl+Shift+F9, Ctrl+Shift+F10, and Ctrl+Shift+F11.");
+    ExplainLastItem("Restore F9 screenshot, F10 video, F11 GIF, and F8 Quick Capture defaults.");
     if (!hotkeys.error.empty()) {
         ImGui::TextColored(ImVec4(1.0F, 0.55F, 0.25F, 1.0F), "%.*s",
                            static_cast<int>(hotkeys.error.size()), hotkeys.error.data());
@@ -543,22 +617,55 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
         ImGui::TextColored(ImVec4(1.0F, 0.4F, 0.35F, 1.0F), "%.*s",
                            static_cast<int>(frameProcessingError.size()), frameProcessingError.data());
     }
+    }
 
+    if (panel.activeTab == 0) {
     ImGui::Spacing();
     ImGui::SeparatorText("Screenshot");
     ImGui::TextUnformatted("Capture one still image from the selected target.");
-    if (ImGui::Button("Copy to clipboard", ImVec2(155.0F, 42.0F))) command.copyScreenshot = true;
+    if (!panel.screenshotDestinationInitialized) {
+        panel.screenshotDestination =
+            screenshot.shortcutDestination == ScreenshotDestination::File ? 1 :
+            screenshot.shortcutDestination == ScreenshotDestination::FileAndClipboard ? 2 : 0;
+        panel.screenshotDestinationInitialized = true;
+    }
+    constexpr std::array shortcutDestinationLabels{
+        "Clipboard only", "Save PNG file", "Save PNG + clipboard",
+    };
+    ImGui::SetNextItemWidth(220.0F);
+    if (ImGui::Combo("Screenshot shortcut result", &panel.screenshotDestination,
+                     shortcutDestinationLabels.data(),
+                     static_cast<int>(shortcutDestinationLabels.size()))) {
+        command.applyScreenshotShortcutDestination = true;
+        command.screenshotShortcutDestination =
+            panel.screenshotDestination == 1 ? ScreenshotDestination::File :
+            panel.screenshotDestination == 2 ? ScreenshotDestination::FileAndClipboard :
+                                         ScreenshotDestination::Clipboard;
+    }
+    ExplainLastItem("Used by the selected-target screenshot shortcut and Quick Capture.");
+    const bool stackScreenshotButtons = ImGui::GetContentRegionAvail().x < 500.0F;
+    const float screenshotButtonWidth = stackScreenshotButtons ? -1.0F : 155.0F;
+    if (ImGui::Button("Copy to clipboard", ImVec2(screenshotButtonWidth, 42.0F))) {
+        command.copyScreenshot = true;
+    }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Copy the screenshot only. No file is created.");
-    ImGui::SameLine();
-    if (ImGui::Button("Save PNG file", ImVec2(140.0F, 42.0F))) command.saveScreenshot = true;
+    if (!stackScreenshotButtons) ImGui::SameLine();
+    if (ImGui::Button("Save PNG file",
+                      ImVec2(stackScreenshotButtons ? -1.0F : 140.0F, 42.0F))) {
+        command.saveScreenshot = true;
+    }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Save a PNG in the output folder.");
-    ImGui::SameLine();
-    if (ImGui::Button("Save PNG + copy", ImVec2(155.0F, 42.0F))) command.saveAndCopyScreenshot = true;
+    if (!stackScreenshotButtons) ImGui::SameLine();
+    if (ImGui::Button("Save PNG + copy", ImVec2(screenshotButtonWidth, 42.0F))) {
+        command.saveAndCopyScreenshot = true;
+    }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Save a PNG and also copy it to the clipboard.");
     if (!screenshotStatus.empty()) {
         ImGui::TextWrapped("%.*s", static_cast<int>(screenshotStatus.size()), screenshotStatus.data());
     }
+    }
 
+    if (panel.activeTab == 1 || (panel.activeTab == 2 && recording.active)) {
     ImGui::Spacing();
     ImGui::SeparatorText(recording.gif ? "GIF recording" : "Video");
     ImGui::TextUnformatted(recording.gif
@@ -585,7 +692,7 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
         if (mediaBusy) ImGui::BeginDisabled();
         if (ImGui::Button("Start video recording", ImVec2(205.0F, 44.0F))) {
             command.startRecording = true;
-            if (selectedEncoder > 0) command.encoderName = encoderChoices[static_cast<std::size_t>(selectedEncoder - 1)].name;
+            if (panel.selectedEncoder > 0) command.encoderName = encoderChoices[static_cast<std::size_t>(panel.selectedEncoder - 1)].name;
         }
         if (mediaBusy) ImGui::EndDisabled();
         ExplainLastItem(mediaBusy
@@ -612,29 +719,28 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     if (!remuxStatus.empty()) {
         ImGui::TextWrapped("%.*s", static_cast<int>(remuxStatus.size()), remuxStatus.data());
     }
-    static int gifFpsIndex = 2;
-    static int gifHeightIndex = 2;
-    static int gifColorIndex = 3;
+    }
     constexpr std::array gifFpsValues{6, 10, 12, 15, 20, 30};
     constexpr std::array gifFpsLabels{"6 fps", "10 fps", "12 fps", "15 fps", "20 fps", "30 fps"};
     constexpr std::array gifHeightValues{360, 480, 720, 1080};
     constexpr std::array gifHeightLabels{"360p", "480p", "720p", "1080p"};
     constexpr std::array gifColorValues{64, 128, 192, 256};
     constexpr std::array gifColorLabels{"64 colors", "128 colors", "192 colors", "256 colors"};
+    if (panel.activeTab == 2) {
     ImGui::Spacing();
     ImGui::SeparatorText("GIF size controls");
     ImGui::TextWrapped("Lower resolution, FPS, and color count create much smaller GIF files. Recording stops automatically at 30 seconds or the safe pixel budget.");
     if (outputBusy) ImGui::BeginDisabled();
-    ImGui::Combo("GIF FPS", &gifFpsIndex, gifFpsLabels.data(), static_cast<int>(gifFpsLabels.size()));
+    ImGui::Combo("GIF FPS", &panel.gifFpsIndex, gifFpsLabels.data(), static_cast<int>(gifFpsLabels.size()));
     ExplainLastItem("Lower FPS greatly reduces GIF size. 12 fps is the recommended default.", outputBusy);
-    ImGui::Combo("GIF resolution", &gifHeightIndex, gifHeightLabels.data(), static_cast<int>(gifHeightLabels.size()));
+    ImGui::Combo("GIF resolution", &panel.gifHeightIndex, gifHeightLabels.data(), static_cast<int>(gifHeightLabels.size()));
     ExplainLastItem("Limits output height while preserving aspect ratio. Lower resolution creates a much smaller GIF.", outputBusy);
-    ImGui::Combo("GIF colors", &gifColorIndex, gifColorLabels.data(), static_cast<int>(gifColorLabels.size()));
+    ImGui::Combo("GIF colors", &panel.gifColorIndex, gifColorLabels.data(), static_cast<int>(gifColorLabels.size()));
     ExplainLastItem("Fewer palette colors reduce file size but may introduce visible banding.", outputBusy);
     if (outputBusy) ImGui::EndDisabled();
-    command.gifFramesPerSecond = gifFpsValues[static_cast<std::size_t>(gifFpsIndex)];
-    command.gifHeight = gifHeightValues[static_cast<std::size_t>(gifHeightIndex)];
-    command.gifColors = gifColorValues[static_cast<std::size_t>(gifColorIndex)];
+    command.gifFramesPerSecond = gifFpsValues[static_cast<std::size_t>(panel.gifFpsIndex)];
+    command.gifHeight = gifHeightValues[static_cast<std::size_t>(panel.gifHeightIndex)];
+    command.gifColors = gifColorValues[static_cast<std::size_t>(panel.gifColorIndex)];
     if (command.gifHeight >= 1080 || command.gifFramesPerSecond >= 30) {
         ImGui::TextColored(ImVec4(1.0F, 0.75F, 0.25F, 1.0F),
                            "Large GIF warning: use 720p / 12 fps or lower for sharing.");
@@ -642,6 +748,10 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     if (!outputBusy &&
         ImGui::Button("Start GIF recording", ImVec2(205.0F, 44.0F))) {
         command.startGif = true;
+        if (panel.selectedEncoder > 0) {
+            command.encoderName =
+                encoderChoices[static_cast<std::size_t>(panel.selectedEncoder - 1)].name;
+        }
     }
     if (!outputBusy && ImGui::IsItemHovered()) {
         ImGui::SetTooltip("Records without audio, then creates an optimized GIF.");
@@ -658,6 +768,7 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     }
     if (!gifStatus.empty()) {
         ImGui::TextWrapped("%.*s", static_cast<int>(gifStatus.size()), gifStatus.data());
+    }
     }
     if (!recording.error.empty()) {
         ImGui::TextColored(ImVec4(1.0F, 0.4F, 0.35F, 1.0F), "%.*s",

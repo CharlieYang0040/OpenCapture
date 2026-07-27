@@ -23,6 +23,7 @@ extern "C" {
 #include <sstream>
 #include <stdexcept>
 #include <winrt/base.h>
+#include <dwmapi.h>
 #include <ShlObj.h>
 #include <ShObjIdl.h>
 #include <wincodec.h>
@@ -116,6 +117,26 @@ std::filesystem::path UiScaleSettingsPath() {
     return path;
 }
 
+std::filesystem::path ScreenshotSettingsPath() {
+    auto path = OutputSettingsPath();
+    if (!path.empty()) path.replace_filename(L"screenshot_settings.txt");
+    return path;
+}
+
+bool SameCaptureTarget(const CaptureTarget& left, const CaptureTarget& right) noexcept {
+    if (left.type != right.type) return false;
+    switch (left.type) {
+    case CaptureTargetType::Window:
+        return left.window == right.window;
+    case CaptureTargetType::Monitor:
+        return left.monitor == right.monitor;
+    case CaptureTargetType::Region:
+        return left.monitor == right.monitor &&
+               EqualRect(&left.region, &right.region) != FALSE;
+    }
+    return false;
+}
+
 std::filesystem::path DefaultOutputDirectory() {
     PWSTR videos{};
     if (FAILED(SHGetKnownFolderPath(FOLDERID_Videos, KF_FLAG_CREATE, nullptr, &videos))) return {};
@@ -127,6 +148,34 @@ std::filesystem::path DefaultOutputDirectory() {
 } // namespace
 
 Win32D3D11App::~Win32D3D11App() { Shutdown(); }
+
+void Win32D3D11App::LoadScreenshotSettings() {
+    std::ifstream input(ScreenshotSettingsPath());
+    if (!input) return;
+    std::string line;
+    while (std::getline(input, line)) {
+        constexpr std::string_view prefix = "shortcut_destination=";
+        if (line.rfind(prefix, 0) == 0) {
+            screenshotHotkeyDestination_ = ParseScreenshotDestination(
+                std::string_view(line).substr(prefix.size()));
+        }
+    }
+}
+
+bool Win32D3D11App::SaveScreenshotSettings() const {
+    const auto path = ScreenshotSettingsPath();
+    if (path.empty()) return false;
+    const std::filesystem::path temporary(path.wstring() + L".tmp");
+    {
+        std::ofstream output(temporary, std::ios::trunc);
+        if (!output) return false;
+        output << "shortcut_destination="
+               << ScreenshotDestinationSettingValue(screenshotHotkeyDestination_) << '\n';
+        if (!output) return false;
+    }
+    return MoveFileExW(temporary.c_str(), path.c_str(),
+                       MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
+}
 
 void Win32D3D11App::LoadUiScaleSettings() {
     std::ifstream input(UiScaleSettingsPath());
@@ -196,6 +245,7 @@ void Win32D3D11App::RefreshWindowDpi() {
 bool Win32D3D11App::Initialize(HINSTANCE instance, int showCommand) {
     instance_ = instance;
     LoadUiScaleSettings();
+    LoadScreenshotSettings();
     winrt::init_apartment(winrt::apartment_type::single_threaded);
     captureSmokeMode_ = std::wcsstr(GetCommandLineW(), L"--wgc-smoke") != nullptr;
     gpuCropSmokeMode_ = std::wcsstr(GetCommandLineW(), L"--gpu-crop-smoke") != nullptr;
@@ -983,17 +1033,107 @@ std::wstring Win32D3D11App::MakeScreenshotPath() const {
     return {};
 }
 
-bool Win32D3D11App::StartScreenshot(ScreenshotDestination destination) {
+bool Win32D3D11App::RunRegionSelection(bool persistent, CaptureTarget* temporaryTarget) {
+    if (regionSelectionActive_) return false;
+    regionSelectionActive_ = true;
+    pendingHotkeyActions_ = 0;
+
+    WINDOWPLACEMENT placement{};
+    placement.length = sizeof(placement);
+    const bool hasPlacement = GetWindowPlacement(window_, &placement) != FALSE;
+    const bool wasVisible = IsWindowVisible(window_) != FALSE;
+    const bool wasForeground = GetForegroundWindow() == window_;
+    const HWND previousZOrderWindow = GetWindow(window_, GW_HWNDPREV);
+
+    targetOverlay_.Hide();
+    if (wasVisible) {
+        ShowWindow(window_, SW_HIDE);
+        DwmFlush();
+    }
+
+    bool accepted = false;
+    if (persistent) {
+        accepted = targetPicker_.SelectRegion(nullptr);
+    } else if (temporaryTarget) {
+        accepted = targetPicker_.PickTemporaryRegion(nullptr, *temporaryTarget);
+    }
+
+    if (wasVisible) {
+        if (hasPlacement) SetWindowPlacement(window_, &placement);
+        if (wasForeground) {
+            const int showCommand =
+                hasPlacement && placement.showCmd == SW_SHOWMAXIMIZED ? SW_SHOWMAXIMIZED : SW_SHOW;
+            ShowWindow(window_, showCommand);
+            SetForegroundWindow(window_);
+        } else if (hasPlacement &&
+                   (placement.showCmd == SW_SHOWMINIMIZED ||
+                    placement.showCmd == SW_MINIMIZE ||
+                    placement.showCmd == SW_SHOWMINNOACTIVE)) {
+            ShowWindow(window_, SW_SHOWMINNOACTIVE);
+        } else {
+            ShowWindow(window_, SW_SHOWNOACTIVATE);
+            if (IsWindow(previousZOrderWindow)) {
+                SetWindowPos(window_, previousZOrderWindow, 0, 0, 0, 0,
+                             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            }
+        }
+    }
+
+    pendingHotkeyActions_ = 0;
+    regionSelectionActive_ = false;
+    return accepted;
+}
+
+bool Win32D3D11App::StartQuickCapture() {
+    if (regionSelectionActive_) {
+        screenshotStatus_ = "A region selection is already active.";
+        return false;
+    }
+    if (pendingScreenshot_) {
+        screenshotStatus_ = "Wait for the current screenshot to finish.";
+        return false;
+    }
+    if (RecordingActive()) {
+        screenshotStatus_ = "Quick Capture is unavailable while video or GIF recording is active.";
+        return false;
+    }
+    if (mediaJobRunning_) {
+        screenshotStatus_ = "Quick Capture is unavailable while a media job is running.";
+        return false;
+    }
+
+    CaptureTarget temporaryTarget{};
+    if (!RunRegionSelection(false, &temporaryTarget)) {
+        screenshotStatus_ = "Quick Capture cancelled.";
+        return false;
+    }
+    return StartScreenshot({
+        screenshotHotkeyDestination_,
+        temporaryTarget,
+        ScreenshotRequestOrigin::QuickCapture,
+    });
+}
+
+bool Win32D3D11App::StartScreenshot(ScreenshotRequest request) {
     if (pendingScreenshot_) return false;
-    if (!targetPicker_.Selected().IsValid()) {
+    if (!request.target.IsValid()) {
         screenshotStatus_ = "Select a valid capture target first.";
         return false;
     }
-    pendingScreenshot_ = destination;
+    pendingScreenshot_ = request;
     screenshotStatus_ = "Waiting for one capture frame...";
     screenshotOwnsCapture_ = false;
+    if (capture_.IsRunning() &&
+        !SameCaptureTarget(capture_.ActiveTarget(), request.target)) {
+        if (RecordingActive()) {
+            screenshotStatus_ = "The requested screenshot target differs from the active recording.";
+            pendingScreenshot_.reset();
+            return false;
+        }
+        capture_.Stop();
+    }
     if (!capture_.IsRunning()) {
-        if (!capture_.Start(targetPicker_.Selected(), device_.Get())) {
+        if (!capture_.Start(request.target, device_.Get())) {
             screenshotStatus_ = capture_.LastError().empty()
                                     ? "Could not start capture for the screenshot."
                                     : capture_.LastError();
@@ -1009,7 +1149,7 @@ bool Win32D3D11App::ProcessScreenshotFrame(const CapturedFrame& frame) {
     if (!pendingScreenshot_) return true;
     FrameProcessOptions options{};
     options.pixelFormat = FramePixelFormat::Bgra;
-    auto processed = frameProcessor_.Process(frame, capture_.ActiveTarget(), options);
+    auto processed = frameProcessor_.Process(frame, pendingScreenshot_->target, options);
     if (!processed) {
         screenshotStatus_ = frameProcessor_.LastError();
         pendingScreenshot_.reset();
@@ -1017,7 +1157,8 @@ bool Win32D3D11App::ProcessScreenshotFrame(const CapturedFrame& frame) {
         screenshotOwnsCapture_ = false;
         return false;
     }
-    const auto destination = *pendingScreenshot_;
+    const auto request = *pendingScreenshot_;
+    const auto destination = request.destination;
     const auto path = destination == ScreenshotDestination::Clipboard ? std::wstring{} : MakeScreenshotPath();
     const bool success = screenshotService_.Capture(device_.Get(), context_.Get(), processed->texture.Get(),
                                                     processed->contentSize, destination, path, window_);
@@ -1033,7 +1174,9 @@ bool Win32D3D11App::ProcessScreenshotFrame(const CapturedFrame& frame) {
         screenshotStatus_ = screenshotService_.LastError();
     }
     pendingScreenshot_.reset();
-    targetOverlay_.FlashScreenshot();
+    if (request.origin != ScreenshotRequestOrigin::QuickCapture) {
+        targetOverlay_.FlashScreenshot();
+    }
     if (screenshotOwnsCapture_) capture_.Stop();
     screenshotOwnsCapture_ = false;
     return success;
@@ -1696,6 +1839,9 @@ void Win32D3D11App::Render() {
         static_cast<int>(std::lround(effectiveUiScale_ * 100.0F)),
         uiScaleStatus_,
     };
+    const ScreenshotUiState screenshotUi{
+        screenshotHotkeyDestination_,
+    };
     std::string overlayStatus = targetOverlayStatus_;
     const auto borderlessStatus = capture_.BorderlessStatus();
     if (!borderlessStatus.empty()) {
@@ -1707,6 +1853,7 @@ void Win32D3D11App::Render() {
                                          outputDirectoryUtf8_,
                                          recoverableRecordings_,
                                          recordingUi, hotkeyUi, borderUi, regionSelectionUi, displayUi,
+                                         screenshotUi,
                                          targetPicker_, capture_, device_.Get());
     if (command.applyUiScale) {
         SetUiScalePercent(command.uiScalePercent);
@@ -1715,12 +1862,18 @@ void Win32D3D11App::Render() {
         SetUiScalePercent(100);
     }
     if (command.selectRegion) {
-        regionSelectionActive_ = true;
-        pendingHotkeyActions_ = 0;
-        targetOverlay_.Hide();
-        targetPicker_.SelectRegion(window_);
-        pendingHotkeyActions_ = 0;
-        regionSelectionActive_ = false;
+        RunRegionSelection(true);
+    }
+    if (command.quickCapture) StartQuickCapture();
+    if (command.applyScreenshotShortcutDestination) {
+        const auto previous = screenshotHotkeyDestination_;
+        screenshotHotkeyDestination_ = command.screenshotShortcutDestination;
+        if (SaveScreenshotSettings()) {
+            screenshotStatus_ = "Screenshot shortcut result saved.";
+        } else {
+            screenshotHotkeyDestination_ = previous;
+            screenshotStatus_ = "Screenshot shortcut result could not be saved.";
+        }
     }
     if (command.applyBorderSettings) {
         targetOverlay_.ApplySettings({
@@ -1766,14 +1919,26 @@ void Win32D3D11App::Render() {
     if (command.resumeRecording) ResumeRecording();
     if (command.remuxLastRecording) RemuxRecordingToMp4(recordingPath_);
     if (command.cancelMediaJob) CancelMediaJob();
-    if (command.copyScreenshot) StartScreenshot(ScreenshotDestination::Clipboard);
-    if (command.saveScreenshot) StartScreenshot(ScreenshotDestination::File);
-    if (command.saveAndCopyScreenshot) StartScreenshot(ScreenshotDestination::FileAndClipboard);
+    if (command.copyScreenshot) StartScreenshot({
+        ScreenshotDestination::Clipboard, targetPicker_.Selected(),
+        ScreenshotRequestOrigin::MainPanel,
+    });
+    if (command.saveScreenshot) StartScreenshot({
+        ScreenshotDestination::File, targetPicker_.Selected(),
+        ScreenshotRequestOrigin::MainPanel,
+    });
+    if (command.saveAndCopyScreenshot) StartScreenshot({
+        ScreenshotDestination::FileAndClipboard, targetPicker_.Selected(),
+        ScreenshotRequestOrigin::MainPanel,
+    });
 
     const std::uint32_t hotkeyActions = pendingHotkeyActions_;
     pendingHotkeyActions_ = 0;
-    if ((hotkeyActions & (1U << static_cast<unsigned>(HotkeyAction::ScreenshotClipboard))) != 0) {
-        StartScreenshot(ScreenshotDestination::Clipboard);
+    if ((hotkeyActions & (1U << static_cast<unsigned>(HotkeyAction::Screenshot))) != 0) {
+        StartScreenshot({
+            screenshotHotkeyDestination_, targetPicker_.Selected(),
+            ScreenshotRequestOrigin::SelectedTargetHotkey,
+        });
     }
     if ((hotkeyActions & (1U << static_cast<unsigned>(HotkeyAction::ToggleVideoRecording))) != 0) {
         if (RecordingActive()) {
@@ -1790,6 +1955,9 @@ void Win32D3D11App::Render() {
             StartRecording(command.gifFramesPerSecond, 0, command.encoderName,
                            false, false, false, true, command.gifHeight, command.gifColors);
         }
+    }
+    if ((hotkeyActions & (1U << static_cast<unsigned>(HotkeyAction::QuickCapture))) != 0) {
+        StartQuickCapture();
     }
     if (recordingGif_ && recordingState_.Phase() == SessionPhase::Recording &&
         recordingElapsedSeconds_ >= gifDurationLimit_) {

@@ -146,6 +146,7 @@ GlobalHotkeys::DefaultBindings() noexcept {
         {MOD_CONTROL | MOD_SHIFT, VK_F9},
         {MOD_CONTROL | MOD_SHIFT, VK_F10},
         {MOD_CONTROL | MOD_SHIFT, VK_F11},
+        {MOD_CONTROL | MOD_SHIFT, VK_F8},
     }};
 }
 

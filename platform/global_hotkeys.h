@@ -8,9 +8,10 @@
 namespace opencapture {
 
 enum class HotkeyAction : std::size_t {
-    ScreenshotClipboard,
+    Screenshot,
     ToggleVideoRecording,
     ToggleGifRecording,
+    QuickCapture,
     Count,
 };
 

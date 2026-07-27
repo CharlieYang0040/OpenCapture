@@ -49,6 +49,7 @@ public:
     bool SelectWindow(std::size_t index);
     bool SelectMonitor(std::size_t index);
     bool SelectRegion(HWND owner);
+    bool PickTemporaryRegion(HWND owner, CaptureTarget& target);
     bool ApplySelectionSettings(RegionSelectionSettings settings);
     bool ResetSelectionSettings();
     bool CreateRegionPreset(std::string name, RegionAnchorType anchorType, std::size_t windowIndex = 0);

@@ -1,5 +1,6 @@
 #include "core/bounded_queue.h"
 #include "core/capture_target.h"
+#include "core/screenshot_options.h"
 #include "core/session_state.h"
 #include "core/ui_scale.h"
 
@@ -146,6 +147,24 @@ void TestUiScale() {
           "user UI scale multiplies the Windows monitor scale");
 }
 
+void TestScreenshotDestinationSettings() {
+    using opencapture::ParseScreenshotDestination;
+    using opencapture::ScreenshotDestination;
+    using opencapture::ScreenshotDestinationSettingValue;
+    Check(ParseScreenshotDestination("clipboard") == ScreenshotDestination::Clipboard,
+          "screenshot settings parse clipboard");
+    Check(ParseScreenshotDestination("file") == ScreenshotDestination::File,
+          "screenshot settings parse file");
+    Check(ParseScreenshotDestination("file_and_clipboard") ==
+              ScreenshotDestination::FileAndClipboard,
+          "screenshot settings parse file and clipboard");
+    Check(ParseScreenshotDestination("invalid") == ScreenshotDestination::Clipboard,
+          "invalid screenshot setting uses the safe default");
+    Check(ScreenshotDestinationSettingValue(ScreenshotDestination::FileAndClipboard) ==
+              "file_and_clipboard",
+          "screenshot settings serialize file and clipboard");
+}
+
 } // namespace
 
 int main() {
@@ -158,6 +177,7 @@ int main() {
     TestRegionSelectionBounds();
     TestOutputSizeNormalization();
     TestUiScale();
+    TestScreenshotDestinationSettings();
     if (failures == 0) std::cout << "All OpenCapture core tests passed.\n";
     return failures == 0 ? 0 : 1;
 }

@@ -31,6 +31,18 @@
 
 namespace opencapture {
 
+enum class ScreenshotRequestOrigin {
+    MainPanel,
+    SelectedTargetHotkey,
+    QuickCapture,
+};
+
+struct ScreenshotRequest {
+    ScreenshotDestination destination{ScreenshotDestination::Clipboard};
+    CaptureTarget target{};
+    ScreenshotRequestOrigin origin{ScreenshotRequestOrigin::MainPanel};
+};
+
 class Win32D3D11App final {
 public:
     Win32D3D11App() = default;
@@ -77,13 +89,17 @@ private:
     void CancelMediaJob();
     [[nodiscard]] std::int64_t EffectiveRecordingDelta(std::int64_t qpc) const noexcept;
     [[nodiscard]] std::wstring MakeScreenshotPath() const;
-    bool StartScreenshot(ScreenshotDestination destination);
+    bool StartScreenshot(ScreenshotRequest request);
+    bool RunRegionSelection(bool persistent, CaptureTarget* temporaryTarget = nullptr);
+    bool StartQuickCapture();
     bool RunNvencSmoke(const ProcessedFrame& frame);
     bool RunEncoderFallbackSmoke();
     bool RunScreenshotSmoke();
     void HandleHotkey(HotkeyAction action);
     void LoadUiScaleSettings();
     bool SaveUiScaleSettings() const;
+    void LoadScreenshotSettings();
+    bool SaveScreenshotSettings() const;
     void ApplyUiScale();
     bool SetUiScalePercent(int percent);
     void RefreshWindowDpi();
@@ -112,8 +128,9 @@ private:
     std::vector<RecoverableRecordingUiItem> recoverableRecordings_;
     std::wstring outputDirectory_;
     std::string outputDirectoryUtf8_;
-    std::optional<ScreenshotDestination> pendingScreenshot_;
+    std::optional<ScreenshotRequest> pendingScreenshot_;
     bool screenshotOwnsCapture_{};
+    ScreenshotDestination screenshotHotkeyDestination_{ScreenshotDestination::Clipboard};
     std::uint32_t adapterVendorId_{};
     FFmpegEncoderRegistry encoderRegistry_;
     FFmpegD3D11Encoder videoEncoder_;

@@ -7,6 +7,8 @@
 #include <vector>
 #include <Windows.h>
 
+#include "core/screenshot_options.h"
+
 struct ID3D11Device;
 
 namespace opencapture {
@@ -44,10 +46,14 @@ struct RecoverableRecordingUiItem {
 };
 
 struct HotkeyUiState {
-    std::array<UINT, 3> modifiers{};
-    std::array<UINT, 3> virtualKeys{};
-    std::array<std::string, 3> labels{};
+    std::array<UINT, 4> modifiers{};
+    std::array<UINT, 4> virtualKeys{};
+    std::array<std::string, 4> labels{};
     std::string_view error;
+};
+
+struct ScreenshotUiState {
+    ScreenshotDestination shortcutDestination{ScreenshotDestination::Clipboard};
 };
 
 struct BorderUiState {
@@ -82,6 +88,8 @@ struct MainPanelCommand {
     bool copyScreenshot{};
     bool saveScreenshot{};
     bool saveAndCopyScreenshot{};
+    bool quickCapture{};
+    bool applyScreenshotShortcutDestination{};
     int changeHotkeyAction{-1};
     UINT hotkeyModifiers{};
     UINT hotkeyVirtualKey{};
@@ -97,6 +105,7 @@ struct MainPanelCommand {
     int borderOpacityPercent{85};
     int regionOutsideDimmingPercent{30};
     int uiScalePercent{100};
+    ScreenshotDestination screenshotShortcutDestination{ScreenshotDestination::Clipboard};
     int framesPerSecond{60};
     int quality{1};
     int gifFramesPerSecond{12};
@@ -126,6 +135,7 @@ public:
                                   const BorderUiState& border,
                                   const RegionSelectionUiState& regionSelection,
                                   const DisplayUiState& display,
+                                  const ScreenshotUiState& screenshot,
                                   CaptureTargetPicker& picker, WindowsGraphicsCapture& capture,
                                   ID3D11Device* device);
 };

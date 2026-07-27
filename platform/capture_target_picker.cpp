@@ -422,7 +422,6 @@ bool RunRegionOverlay(HWND owner, const RECT* initialRegion,
         if (dimWindow) DestroyWindow(dimWindow);
     }
     UnregisterClassW(className, cls.hInstance);
-    if (IsWindow(owner)) SetForegroundWindow(owner);
     if (!state.accepted) return false;
     result = state.result;
     return true;
@@ -496,11 +495,23 @@ bool CaptureTargetPicker::SelectMonitor(std::size_t index) {
 }
 
 bool CaptureTargetPicker::SelectRegion(HWND owner) {
-    RECT region{};
-    if (!RunRegionOverlay(owner, nullptr, selectionSettings_, region)) return false;
-    selected_ = CaptureTarget{CaptureTargetType::Region, nullptr, MonitorFromRect(&region, MONITOR_DEFAULTTONEAREST), region};
+    CaptureTarget target{};
+    if (!PickTemporaryRegion(owner, target)) return false;
+    selected_ = target;
     Save();
     return true;
+}
+
+bool CaptureTargetPicker::PickTemporaryRegion(HWND owner, CaptureTarget& target) {
+    RECT region{};
+    if (!RunRegionOverlay(owner, nullptr, selectionSettings_, region)) return false;
+    target = CaptureTarget{
+        CaptureTargetType::Region,
+        nullptr,
+        MonitorFromRect(&region, MONITOR_DEFAULTTONEAREST),
+        region,
+    };
+    return target.IsValid();
 }
 
 bool CaptureTargetPicker::ApplySelectionSettings(RegionSelectionSettings settings) {

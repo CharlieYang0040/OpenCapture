@@ -57,6 +57,9 @@ Implemented:
 - Configurable capture, video, and GIF global shortcuts with conflict and repeat protection
 - Result-oriented tooltips for primary actions and performance/size controls
 - Adaptive UI that follows 100-200% monitor DPI with a persistent 75-200% user adjustment
+- Configurable shortcut output: clipboard, PNG file, or both
+- `Ctrl+Shift+F8` Quick Capture without changing the persistent region or presets
+- Automatic main-window hiding during region selection and Capture/Video/GIF/Settings tabs
 - Bounded queue with a drop-oldest overload policy
 - Core unit tests and Windows GitHub Actions CI
 

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/screenshot_options.h"
+
 #include <Windows.h>
 #include <d3d11.h>
 
@@ -8,12 +10,6 @@
 #include <vector>
 
 namespace opencapture {
-
-enum class ScreenshotDestination {
-    File,
-    Clipboard,
-    FileAndClipboard,
-};
 
 struct BgraImage {
     int width{};

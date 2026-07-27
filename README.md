@@ -57,6 +57,9 @@ OpenCapture는 Windows 10/11을 위한 네이티브 화면 캡처 애플리케�
 - 충돌 감지와 자동 반복 방지를 적용한 사용자 지정 캡처·비디오·GIF 전역 단축키
 - 주요 버튼과 성능·용량 설정의 결과 중심 툴팁
 - 100~200% 모니터 DPI를 자동 반영하고 75~200% 추가 보정을 저장하는 적응형 UI
+- 단축키 캡처 결과를 클립보드, PNG 또는 둘 다로 선택하는 스크린샷 설정
+- 영구 Region과 프리셋을 바꾸지 않는 `Ctrl+Shift+F8` Quick Capture
+- Region 선택 중 메인 창 자동 숨김과 Capture·Video·GIF·Settings 탭 UI
 - drop-oldest 정책을 사용하는 제한 큐
 - 핵심 모델 단위 테스트와 Windows GitHub Actions CI
 
