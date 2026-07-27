@@ -154,6 +154,7 @@ private:
     CaptureTargetOverlay targetOverlay_;
     GlobalHotkeys globalHotkeys_;
     std::uint32_t pendingHotkeyActions_{};
+    bool regionSelectionActive_{};
     WindowsGraphicsCapture capture_;
     bool captureSmokeMode_{};
     bool gpuCropSmokeMode_{};

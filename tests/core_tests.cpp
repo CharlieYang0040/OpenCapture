@@ -100,6 +100,21 @@ void TestLocalRegionConversion() {
     Check(clipped.right == 1920 && clipped.bottom == 1080, "region clips at monitor extent");
 }
 
+void TestRegionSelectionBounds() {
+    const RECT monitor{-1920, 0, 0, 1080};
+    const POINT clamped = opencapture::ClampPointToRect(POINT{-2000, 1200}, monitor);
+    Check(clamped.x == -1920 && clamped.y == 1080,
+          "selection pointer stays inside its starting monitor");
+
+    const RECT selection{-1800, 100, -800, 700};
+    const RECT movedLeft = opencapture::MoveRectWithinBounds(selection, -500, 0, monitor);
+    Check(movedLeft.left == -1920 && movedLeft.right == -920,
+          "keyboard movement clamps at the left monitor edge");
+    const RECT movedBottom = opencapture::MoveRectWithinBounds(selection, 0, 1000, monitor);
+    Check(movedBottom.top == 480 && movedBottom.bottom == 1080,
+          "keyboard movement clamps at the bottom monitor edge");
+}
+
 void TestOutputSizeNormalization() {
     const SIZE source{1921, 1081};
     const SIZE unchanged = opencapture::NormalizeOutputSize({}, source, false);
@@ -130,6 +145,7 @@ int main() {
     TestCaptureTarget();
     TestRegionPresetScaling();
     TestLocalRegionConversion();
+    TestRegionSelectionBounds();
     TestOutputSizeNormalization();
     if (failures == 0) std::cout << "All OpenCapture core tests passed.\n";
     return failures == 0 ? 0 : 1;

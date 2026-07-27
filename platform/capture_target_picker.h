@@ -27,6 +27,10 @@ struct MonitorEntry {
     bool primary{};
 };
 
+struct RegionSelectionSettings {
+    int outsideDimmingPercent{30};
+};
+
 class CaptureTargetPicker final {
 public:
     CaptureTargetPicker();
@@ -38,10 +42,15 @@ public:
     [[nodiscard]] const std::vector<CaptureRegionPreset>& Presets() const noexcept { return presets_; }
     [[nodiscard]] std::string SelectedLabel() const;
     [[nodiscard]] const std::string& LastError() const noexcept { return lastError_; }
+    [[nodiscard]] const RegionSelectionSettings& SelectionSettings() const noexcept {
+        return selectionSettings_;
+    }
 
     bool SelectWindow(std::size_t index);
     bool SelectMonitor(std::size_t index);
     bool SelectRegion(HWND owner);
+    bool ApplySelectionSettings(RegionSelectionSettings settings);
+    bool ResetSelectionSettings();
     bool CreateRegionPreset(std::string name, RegionAnchorType anchorType, std::size_t windowIndex = 0);
     bool ApplyRegionPreset(std::size_t index);
     bool DeleteRegionPreset(std::size_t index);
@@ -52,12 +61,15 @@ public:
 private:
     void Load();
     void Save() const;
+    void LoadSelectionSettings();
+    bool SaveSelectionSettings() const;
     void LoadPresets();
     bool SavePresets();
 
     std::vector<WindowEntry> windows_;
     std::vector<MonitorEntry> monitors_;
     CaptureTarget selected_{};
+    RegionSelectionSettings selectionSettings_{};
     std::vector<CaptureRegionPreset> presets_;
     std::string lastError_;
 };

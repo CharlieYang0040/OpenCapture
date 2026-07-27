@@ -56,7 +56,12 @@ struct BorderUiState {
     int opacityPercent{85};
 };
 
+struct RegionSelectionUiState {
+    int outsideDimmingPercent{30};
+};
+
 struct MainPanelCommand {
+    bool selectRegion{};
     bool chooseOutputDirectory{};
     int recoverRecordingIndex{-1};
     bool startRecording{};
@@ -76,9 +81,12 @@ struct MainPanelCommand {
     bool resetHotkeys{};
     bool applyBorderSettings{};
     bool resetBorderSettings{};
+    bool applyRegionSelectionSettings{};
+    bool resetRegionSelectionSettings{};
     bool borderVisible{true};
     int borderThickness{3};
     int borderOpacityPercent{85};
+    int regionOutsideDimmingPercent{30};
     int framesPerSecond{60};
     int quality{1};
     int gifFramesPerSecond{12};
@@ -104,10 +112,11 @@ public:
                                  std::string_view outputDirectory,
                                  const std::vector<RecoverableRecordingUiItem>& recoverableRecordings,
                                  const RecordingUiState& recording,
-                                 const HotkeyUiState& hotkeys,
-                                 const BorderUiState& border,
-                                 CaptureTargetPicker& picker, WindowsGraphicsCapture& capture,
-                                 HWND owner, ID3D11Device* device);
+                                  const HotkeyUiState& hotkeys,
+                                  const BorderUiState& border,
+                                  const RegionSelectionUiState& regionSelection,
+                                  CaptureTargetPicker& picker, WindowsGraphicsCapture& capture,
+                                  ID3D11Device* device);
 };
 
 } // namespace opencapture

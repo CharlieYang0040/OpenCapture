@@ -33,6 +33,27 @@ RECT ToLocalClampedRegion(RECT desktopRegion, RECT sourceDesktopBounds) noexcept
     return RECT{left, top, right, bottom};
 }
 
+POINT ClampPointToRect(POINT point, RECT bounds) noexcept {
+    point.x = std::clamp(point.x, bounds.left, bounds.right);
+    point.y = std::clamp(point.y, bounds.top, bounds.bottom);
+    return point;
+}
+
+RECT MoveRectWithinBounds(RECT rectangle, LONG dx, LONG dy, RECT bounds) noexcept {
+    if (rectangle.right <= rectangle.left || rectangle.bottom <= rectangle.top ||
+        bounds.right <= bounds.left || bounds.bottom <= bounds.top) {
+        return rectangle;
+    }
+    if (rectangle.right - rectangle.left > bounds.right - bounds.left ||
+        rectangle.bottom - rectangle.top > bounds.bottom - bounds.top) {
+        return rectangle;
+    }
+    dx = std::clamp(dx, bounds.left - rectangle.left, bounds.right - rectangle.right);
+    dy = std::clamp(dy, bounds.top - rectangle.top, bounds.bottom - rectangle.bottom);
+    OffsetRect(&rectangle, dx, dy);
+    return rectangle;
+}
+
 SIZE NormalizeOutputSize(SIZE requestedSize, SIZE sourceSize, bool requireEven) noexcept {
     LONG width = requestedSize.cx > 0 ? requestedSize.cx : sourceSize.cx;
     LONG height = requestedSize.cy > 0 ? requestedSize.cy : sourceSize.cy;

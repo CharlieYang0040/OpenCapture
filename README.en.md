@@ -48,6 +48,8 @@ Implemented:
 - Media-job lifetime handling that removes `.part.gif` while retaining the safe source MKV on cancellation or shutdown
 - One configurable output folder shared by screenshots and recordings
 - Region confirmation that returns to the main app and restores its monitor after restart
+- Region selection that keeps the selected area clear and dims only the outside by a configurable 0-70%
+- Region coordinates constrained to the starting monitor so cross-monitor drags cannot silently produce clipped output
 - Result-oriented screenshot, video, and GIF controls
 - Click-through always-on-top borders for the selected region, window, or monitor
 - Capture-excluded blue idle, yellow capture, and orange paused border states

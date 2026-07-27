@@ -1592,6 +1592,9 @@ void Win32D3D11App::Render() {
         borderSettings.thickness,
         borderSettings.opacityPercent,
     };
+    const RegionSelectionUiState regionSelectionUi{
+        targetPicker_.SelectionSettings().outsideDimmingPercent,
+    };
     std::string overlayStatus = targetOverlayStatus_;
     const auto borderlessStatus = capture_.BorderlessStatus();
     if (!borderlessStatus.empty()) {
@@ -1602,8 +1605,16 @@ void Win32D3D11App::Render() {
                                          screenshotStatus_, overlayStatus, audioStatus_, recoveryStatus_, remuxStatus_, gifStatus_,
                                          outputDirectoryUtf8_,
                                          recoverableRecordings_,
-                                         recordingUi, hotkeyUi, borderUi,
-                                         targetPicker_, capture_, window_, device_.Get());
+                                         recordingUi, hotkeyUi, borderUi, regionSelectionUi,
+                                         targetPicker_, capture_, device_.Get());
+    if (command.selectRegion) {
+        regionSelectionActive_ = true;
+        pendingHotkeyActions_ = 0;
+        targetOverlay_.Hide();
+        targetPicker_.SelectRegion(window_);
+        pendingHotkeyActions_ = 0;
+        regionSelectionActive_ = false;
+    }
     if (command.applyBorderSettings) {
         targetOverlay_.ApplySettings({
             command.borderVisible,
@@ -1615,6 +1626,14 @@ void Win32D3D11App::Render() {
     if (command.resetBorderSettings) {
         targetOverlay_.ResetSettings();
         targetOverlayStatus_ = targetOverlay_.LastError();
+    }
+    if (command.applyRegionSelectionSettings) {
+        targetPicker_.ApplySelectionSettings({
+            command.regionOutsideDimmingPercent,
+        });
+    }
+    if (command.resetRegionSelectionSettings) {
+        targetPicker_.ResetSelectionSettings();
     }
     if (command.changeHotkeyAction >= 0 &&
         command.changeHotkeyAction < static_cast<int>(HotkeyAction::Count)) {
@@ -1784,6 +1803,7 @@ void Win32D3D11App::Shutdown() {
 }
 
 void Win32D3D11App::HandleHotkey(HotkeyAction action) {
+    if (regionSelectionActive_) return;
     pendingHotkeyActions_ |= 1U << static_cast<unsigned>(action);
 }
 

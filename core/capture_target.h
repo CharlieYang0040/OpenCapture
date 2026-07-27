@@ -29,6 +29,8 @@ struct CaptureRegionPreset {
 
 [[nodiscard]] RECT ScaleRegionToClient(const CaptureRegionPreset& preset, SIZE currentClientSize) noexcept;
 [[nodiscard]] RECT ToLocalClampedRegion(RECT desktopRegion, RECT sourceDesktopBounds) noexcept;
+[[nodiscard]] POINT ClampPointToRect(POINT point, RECT bounds) noexcept;
+[[nodiscard]] RECT MoveRectWithinBounds(RECT rectangle, LONG dx, LONG dy, RECT bounds) noexcept;
 [[nodiscard]] SIZE NormalizeOutputSize(SIZE requestedSize, SIZE sourceSize, bool requireEven) noexcept;
 [[nodiscard]] SIZE FitOutputHeight(SIZE sourceSize, LONG maximumHeight, bool requireEven) noexcept;
 [[nodiscard]] double GifDurationLimit(SIZE outputSize, int framesPerSecond,

@@ -39,6 +39,12 @@ std::filesystem::path PresetsPath() {
     return result;
 }
 
+std::filesystem::path SelectionSettingsPath() {
+    auto result = SettingsPath();
+    if (!result.empty()) result.replace_filename(L"selection_overlay_settings.txt");
+    return result;
+}
+
 HICON FindWindowIcon(HWND window) {
     DWORD_PTR result{};
     constexpr UINT timeoutMs = 100;
@@ -105,10 +111,158 @@ struct OverlayState {
     POINT anchor{};
     POINT cursor{};
     RECT result{};
+    RECT activeMonitor{};
+    std::vector<RECT> monitors;
+    std::array<HWND, 4> dimWindows{};
+    HWND inputWindow{};
+    HWND visualWindow{};
+    int desktopX{};
+    int desktopY{};
+    int desktopWidth{};
+    int desktopHeight{};
+    int outsideDimmingPercent{30};
     bool dragging{};
     bool hasSelection{};
     bool accepted{};
 };
+
+RECT CurrentSelection(const OverlayState& state) {
+    if (state.dragging) {
+        return RECT{
+            std::min(state.anchor.x, state.cursor.x),
+            std::min(state.anchor.y, state.cursor.y),
+            std::max(state.anchor.x, state.cursor.x),
+            std::max(state.anchor.y, state.cursor.y),
+        };
+    }
+    return state.result;
+}
+
+RECT MonitorBoundsAt(const OverlayState& state, POINT clientPoint) {
+    POINT screenPoint{clientPoint.x + state.desktopX, clientPoint.y + state.desktopY};
+    const HMONITOR monitor = MonitorFromPoint(screenPoint, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO info{};
+    info.cbSize = sizeof(info);
+    if (!monitor || !GetMonitorInfoW(monitor, &info)) {
+        return RECT{0, 0, state.desktopWidth, state.desktopHeight};
+    }
+    OffsetRect(&info.rcMonitor, -state.desktopX, -state.desktopY);
+    return info.rcMonitor;
+}
+
+void PositionOverlayWindow(HWND window, const OverlayState& state, const RECT& rectangle) {
+    const int width = rectangle.right - rectangle.left;
+    const int height = rectangle.bottom - rectangle.top;
+    if (!window || width <= 0 || height <= 0 || state.outsideDimmingPercent <= 0) {
+        if (window) ShowWindow(window, SW_HIDE);
+        return;
+    }
+    SetWindowPos(window, HWND_TOPMOST,
+                 state.desktopX + rectangle.left, state.desktopY + rectangle.top,
+                 width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+}
+
+void UpdateOverlayLayout(OverlayState& state) {
+    const RECT desktop{0, 0, state.desktopWidth, state.desktopHeight};
+    if (state.dragging || state.hasSelection) {
+        const RECT selection = CurrentSelection(state);
+        const std::array rectangles{
+            RECT{desktop.left, desktop.top, desktop.right, selection.top},
+            RECT{desktop.left, selection.bottom, desktop.right, desktop.bottom},
+            RECT{desktop.left, selection.top, selection.left, selection.bottom},
+            RECT{selection.right, selection.top, desktop.right, selection.bottom},
+        };
+        for (std::size_t index = 0; index < state.dimWindows.size(); ++index) {
+            PositionOverlayWindow(state.dimWindows[index], state, rectangles[index]);
+        }
+    } else {
+        PositionOverlayWindow(state.dimWindows[0], state, desktop);
+        for (std::size_t index = 1; index < state.dimWindows.size(); ++index) {
+            ShowWindow(state.dimWindows[index], SW_HIDE);
+        }
+    }
+    if (state.visualWindow) {
+        SetWindowPos(state.visualWindow, HWND_TOPMOST,
+                     state.desktopX, state.desktopY,
+                     state.desktopWidth, state.desktopHeight,
+                     SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        InvalidateRect(state.visualWindow, nullptr, FALSE);
+        UpdateWindow(state.visualWindow);
+    }
+}
+
+void FillFrame(HDC dc, RECT rectangle, int thickness, COLORREF color) {
+    if (rectangle.right <= rectangle.left || rectangle.bottom <= rectangle.top) return;
+    thickness = std::clamp(
+        thickness, 1,
+        static_cast<int>(std::max<LONG>(
+            1, std::min(rectangle.right - rectangle.left,
+                        rectangle.bottom - rectangle.top) / 2)));
+    HBRUSH brush = CreateSolidBrush(color);
+    const std::array edges{
+        RECT{rectangle.left, rectangle.top, rectangle.right, rectangle.top + thickness},
+        RECT{rectangle.left, rectangle.bottom - thickness, rectangle.right, rectangle.bottom},
+        RECT{rectangle.left, rectangle.top + thickness, rectangle.left + thickness, rectangle.bottom - thickness},
+        RECT{rectangle.right - thickness, rectangle.top + thickness, rectangle.right, rectangle.bottom - thickness},
+    };
+    for (const auto& edge : edges) FillRect(dc, &edge, brush);
+    DeleteObject(brush);
+}
+
+void DrawOverlayText(HDC dc, RECT rectangle, const wchar_t* text) {
+    HBRUSH background = CreateSolidBrush(RGB(22, 26, 34));
+    FillRect(dc, &rectangle, background);
+    DeleteObject(background);
+    SetTextColor(dc, RGB(255, 255, 255));
+    SetBkMode(dc, TRANSPARENT);
+    RECT textBounds = rectangle;
+    InflateRect(&textBounds, -8, -5);
+    DrawTextW(dc, text, -1, &textBounds, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+}
+
+void PaintVisualOverlay(HWND window, const OverlayState& state) {
+    constexpr COLORREF transparentKey = RGB(1, 2, 3);
+    PAINTSTRUCT paint{};
+    HDC dc = BeginPaint(window, &paint);
+    RECT client{};
+    GetClientRect(window, &client);
+    HBRUSH transparentBrush = CreateSolidBrush(transparentKey);
+    FillRect(dc, &client, transparentBrush);
+    DeleteObject(transparentBrush);
+
+    constexpr wchar_t instructions[] =
+        L"Drag to select within one monitor | Arrow: 1px | Shift+Arrow: 10px | Enter: confirm | Esc: cancel";
+    for (const RECT& monitor : state.monitors) {
+        RECT label{monitor.left + 20, monitor.top + 20,
+                   std::min(monitor.left + 760, monitor.right - 20), monitor.top + 54};
+        if (label.right > label.left) DrawOverlayText(dc, label, instructions);
+    }
+
+    if (state.dragging || state.hasSelection) {
+        RECT selection = CurrentSelection(state);
+        RECT outer = selection;
+        InflateRect(&outer, 1, 1);
+        FillFrame(dc, outer, 4, RGB(255, 255, 255));
+        FillFrame(dc, selection, 2, RGB(35, 145, 255));
+
+        const std::wstring dimensions =
+            std::to_wstring(selection.right - selection.left) + L" x " +
+            std::to_wstring(selection.bottom - selection.top);
+        constexpr int labelWidth = 150;
+        constexpr int labelHeight = 32;
+        LONG labelX = selection.left + 8;
+        LONG labelY = selection.top + 8;
+        if (state.activeMonitor.right > state.activeMonitor.left) {
+            labelX = std::clamp(labelX, state.activeMonitor.left,
+                                std::max(state.activeMonitor.left, state.activeMonitor.right - labelWidth));
+            labelY = std::clamp(labelY, state.activeMonitor.top,
+                                std::max(state.activeMonitor.top, state.activeMonitor.bottom - labelHeight));
+        }
+        RECT label{labelX, labelY, labelX + labelWidth, labelY + labelHeight};
+        DrawOverlayText(dc, label, dimensions.c_str());
+    }
+    EndPaint(window, &paint);
+}
 
 LRESULT CALLBACK OverlayProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
     auto* state = reinterpret_cast<OverlayState*>(GetWindowLongPtrW(window, GWLP_USERDATA));
@@ -118,23 +272,34 @@ LRESULT CALLBACK OverlayProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
         return TRUE;
     }
     if (!state) return DefWindowProcW(window, message, wParam, lParam);
+    const bool inputWindow = window == state->inputWindow;
+    const bool visualWindow = window == state->visualWindow;
     switch (message) {
+    case WM_NCHITTEST:
+        return inputWindow ? HTCLIENT : HTTRANSPARENT;
+    case WM_ERASEBKGND:
+        return 1;
     case WM_LBUTTONDOWN:
+        if (!inputWindow) return 0;
         state->anchor = POINT{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+        state->activeMonitor = MonitorBoundsAt(*state, state->anchor);
+        state->anchor = ClampPointToRect(state->anchor, state->activeMonitor);
         state->cursor = state->anchor;
         state->dragging = true;
         SetCapture(window);
-        InvalidateRect(window, nullptr, TRUE);
+        UpdateOverlayLayout(*state);
         return 0;
     case WM_MOUSEMOVE:
-        if (state->dragging) {
-            state->cursor = POINT{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
-            InvalidateRect(window, nullptr, TRUE);
+        if (inputWindow && state->dragging) {
+            state->cursor = ClampPointToRect(
+                POINT{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)}, state->activeMonitor);
+            UpdateOverlayLayout(*state);
         }
         return 0;
     case WM_LBUTTONUP:
-        if (state->dragging) {
-            state->cursor = POINT{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+        if (inputWindow && state->dragging) {
+            state->cursor = ClampPointToRect(
+                POINT{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)}, state->activeMonitor);
             state->dragging = false;
             ReleaseCapture();
             const int left = std::min(state->anchor.x, state->cursor.x);
@@ -144,49 +309,37 @@ LRESULT CALLBACK OverlayProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
             if (right > left && bottom > top) {
                 state->result = RECT{left, top, right, bottom};
                 state->hasSelection = true;
-                InvalidateRect(window, nullptr, TRUE);
             }
+            UpdateOverlayLayout(*state);
         }
         return 0;
     case WM_KEYDOWN:
+        if (!inputWindow) return 0;
         if (wParam == VK_ESCAPE) DestroyWindow(window);
         else if (wParam == VK_RETURN && state->hasSelection) {
-            const int desktopX = GetSystemMetrics(SM_XVIRTUALSCREEN);
-            const int desktopY = GetSystemMetrics(SM_YVIRTUALSCREEN);
-            OffsetRect(&state->result, desktopX, desktopY);
+            OffsetRect(&state->result, state->desktopX, state->desktopY);
             state->accepted = true;
             DestroyWindow(window);
         } else if (state->hasSelection && (wParam == VK_LEFT || wParam == VK_RIGHT || wParam == VK_UP || wParam == VK_DOWN)) {
             const int amount = (GetKeyState(VK_SHIFT) & 0x8000) != 0 ? 10 : 1;
-            const int dx = wParam == VK_LEFT ? -amount : (wParam == VK_RIGHT ? amount : 0);
-            const int dy = wParam == VK_UP ? -amount : (wParam == VK_DOWN ? amount : 0);
-            OffsetRect(&state->result, dx, dy);
-            InvalidateRect(window, nullptr, TRUE);
+            const LONG dx = wParam == VK_LEFT ? -amount : (wParam == VK_RIGHT ? amount : 0);
+            const LONG dy = wParam == VK_UP ? -amount : (wParam == VK_DOWN ? amount : 0);
+            state->result = MoveRectWithinBounds(
+                state->result, dx, dy, state->activeMonitor);
+            UpdateOverlayLayout(*state);
         }
         return 0;
     case WM_PAINT: {
-        PAINTSTRUCT paint{};
-        HDC dc = BeginPaint(window, &paint);
-        RECT client{};
-        GetClientRect(window, &client);
-        FillRect(dc, &client, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
-        SetTextColor(dc, RGB(255, 255, 255));
-        SetBkMode(dc, TRANSPARENT);
-        constexpr wchar_t instructions[] = L"Drag to select | Arrow: 1px | Shift+Arrow: 10px | Enter: confirm | Esc: cancel";
-        TextOutW(dc, 20, 20, instructions, static_cast<int>(std::size(instructions) - 1));
-        if (state->dragging || state->hasSelection) {
-            RECT selection = state->dragging
-                ? RECT{std::min(state->anchor.x, state->cursor.x), std::min(state->anchor.y, state->cursor.y),
-                       std::max(state->anchor.x, state->cursor.x), std::max(state->anchor.y, state->cursor.y)}
-                : state->result;
-            HBRUSH brush = CreateSolidBrush(RGB(35, 110, 220));
-            FrameRect(dc, &selection, brush);
-            DeleteObject(brush);
-            std::wstring dimensions = std::to_wstring(selection.right - selection.left) + L" x " +
-                                      std::to_wstring(selection.bottom - selection.top);
-            TextOutW(dc, selection.left + 6, selection.top + 6, dimensions.c_str(), static_cast<int>(dimensions.size()));
+        if (visualWindow) {
+            PaintVisualOverlay(window, *state);
+        } else {
+            PAINTSTRUCT paint{};
+            HDC dc = BeginPaint(window, &paint);
+            RECT client{};
+            GetClientRect(window, &client);
+            FillRect(dc, &client, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+            EndPaint(window, &paint);
         }
-        EndPaint(window, &paint);
         return 0;
     }
     case WM_DESTROY:
@@ -195,7 +348,8 @@ LRESULT CALLBACK OverlayProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
     return DefWindowProcW(window, message, wParam, lParam);
 }
 
-bool RunRegionOverlay(HWND owner, const RECT* initialRegion, RECT& result) {
+bool RunRegionOverlay(HWND owner, const RECT* initialRegion,
+                      const RegionSelectionSettings& settings, RECT& result) {
     constexpr wchar_t className[] = L"OpenCaptureRegionOverlay";
     WNDCLASSEXW cls{sizeof(cls)};
     cls.lpfnWndProc = OverlayProc;
@@ -204,25 +358,68 @@ bool RunRegionOverlay(HWND owner, const RECT* initialRegion, RECT& result) {
     cls.lpszClassName = className;
     RegisterClassExW(&cls);
     OverlayState state{};
-    const int x = GetSystemMetrics(SM_XVIRTUALSCREEN);
-    const int y = GetSystemMetrics(SM_YVIRTUALSCREEN);
-    const int width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
-    const int height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    state.desktopX = GetSystemMetrics(SM_XVIRTUALSCREEN);
+    state.desktopY = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    state.desktopWidth = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    state.desktopHeight = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    state.outsideDimmingPercent = std::clamp(settings.outsideDimmingPercent, 0, 70);
+    EnumDisplayMonitors(nullptr, nullptr, [](HMONITOR, HDC, LPRECT bounds, LPARAM parameter) -> BOOL {
+        auto& overlayState = *reinterpret_cast<OverlayState*>(parameter);
+        RECT local = *bounds;
+        OffsetRect(&local, -overlayState.desktopX, -overlayState.desktopY);
+        overlayState.monitors.push_back(local);
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&state));
     if (initialRegion) {
         state.result = *initialRegion;
-        OffsetRect(&state.result, -x, -y);
+        OffsetRect(&state.result, -state.desktopX, -state.desktopY);
         state.hasSelection = true;
+        const POINT center{
+            (state.result.left + state.result.right) / 2,
+            (state.result.top + state.result.bottom) / 2,
+        };
+        state.activeMonitor = MonitorBoundsAt(state, center);
+        IntersectRect(&state.result, &state.result, &state.activeMonitor);
     }
-    HWND overlay = CreateWindowExW(WS_EX_TOPMOST | WS_EX_LAYERED, className, L"Select capture region", WS_POPUP,
-                                   x, y, width, height, owner, nullptr, cls.hInstance, &state);
-    if (!overlay) return false;
-    SetLayeredWindowAttributes(overlay, 0, 150, LWA_ALPHA);
-    ShowWindow(overlay, SW_SHOW);
-    SetForegroundWindow(overlay);
+    state.inputWindow = CreateWindowExW(
+        WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TOOLWINDOW,
+        className, L"Select capture region", WS_POPUP,
+        state.desktopX, state.desktopY, state.desktopWidth, state.desktopHeight,
+        owner, nullptr, cls.hInstance, &state);
+    if (!state.inputWindow) return false;
+    SetLayeredWindowAttributes(state.inputWindow, 0, 1, LWA_ALPHA);
+
+    const BYTE dimAlpha = static_cast<BYTE>(
+        std::clamp(state.outsideDimmingPercent * 255 / 100, 0, 255));
+    for (auto& dimWindow : state.dimWindows) {
+        dimWindow = CreateWindowExW(
+            WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+            className, L"", WS_POPUP, 0, 0, 0, 0,
+            nullptr, nullptr, cls.hInstance, &state);
+        if (dimWindow) SetLayeredWindowAttributes(dimWindow, 0, dimAlpha, LWA_ALPHA);
+    }
+    state.visualWindow = CreateWindowExW(
+        WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+        className, L"", WS_POPUP,
+        state.desktopX, state.desktopY, state.desktopWidth, state.desktopHeight,
+        nullptr, nullptr, cls.hInstance, &state);
+    if (state.visualWindow) {
+        constexpr COLORREF transparentKey = RGB(1, 2, 3);
+        SetLayeredWindowAttributes(state.visualWindow, transparentKey, 0, LWA_COLORKEY);
+        ShowWindow(state.visualWindow, SW_SHOWNOACTIVATE);
+    }
+    ShowWindow(state.inputWindow, SW_SHOW);
+    UpdateOverlayLayout(state);
+    SetForegroundWindow(state.inputWindow);
+    SetFocus(state.inputWindow);
     MSG message{};
-    while (IsWindow(overlay) && GetMessageW(&message, nullptr, 0, 0) > 0) {
+    while (IsWindow(state.inputWindow) && GetMessageW(&message, nullptr, 0, 0) > 0) {
         TranslateMessage(&message);
         DispatchMessageW(&message);
+    }
+    if (state.visualWindow) DestroyWindow(state.visualWindow);
+    for (auto& dimWindow : state.dimWindows) {
+        if (dimWindow) DestroyWindow(dimWindow);
     }
     UnregisterClassW(className, cls.hInstance);
     if (IsWindow(owner)) SetForegroundWindow(owner);
@@ -233,7 +430,12 @@ bool RunRegionOverlay(HWND owner, const RECT* initialRegion, RECT& result) {
 
 } // namespace
 
-CaptureTargetPicker::CaptureTargetPicker() { Refresh(); Load(); LoadPresets(); }
+CaptureTargetPicker::CaptureTargetPicker() {
+    Refresh();
+    Load();
+    LoadSelectionSettings();
+    LoadPresets();
+}
 
 void CaptureTargetPicker::Refresh() {
     windows_.clear();
@@ -295,10 +497,27 @@ bool CaptureTargetPicker::SelectMonitor(std::size_t index) {
 
 bool CaptureTargetPicker::SelectRegion(HWND owner) {
     RECT region{};
-    if (!RunRegionOverlay(owner, nullptr, region)) return false;
+    if (!RunRegionOverlay(owner, nullptr, selectionSettings_, region)) return false;
     selected_ = CaptureTarget{CaptureTargetType::Region, nullptr, MonitorFromRect(&region, MONITOR_DEFAULTTONEAREST), region};
     Save();
     return true;
+}
+
+bool CaptureTargetPicker::ApplySelectionSettings(RegionSelectionSettings settings) {
+    settings.outsideDimmingPercent = std::clamp(settings.outsideDimmingPercent, 0, 70);
+    const auto previous = selectionSettings_;
+    selectionSettings_ = settings;
+    if (!SaveSelectionSettings()) {
+        selectionSettings_ = previous;
+        lastError_ = "Region selection appearance could not be saved.";
+        return false;
+    }
+    lastError_.clear();
+    return true;
+}
+
+bool CaptureTargetPicker::ResetSelectionSettings() {
+    return ApplySelectionSettings(RegionSelectionSettings{});
 }
 
 bool CaptureTargetPicker::CreateRegionPreset(std::string name, RegionAnchorType anchorType, std::size_t windowIndex) {
@@ -496,6 +715,35 @@ void CaptureTargetPicker::Load() {
         const auto& fallback = primary != monitors_.end() ? *primary : monitors_.front();
         selected_ = CaptureTarget{CaptureTargetType::Monitor, nullptr, fallback.handle, fallback.bounds};
     }
+}
+
+void CaptureTargetPicker::LoadSelectionSettings() {
+    std::ifstream input(SelectionSettingsPath());
+    if (!input) return;
+    int outsideDimmingPercent = selectionSettings_.outsideDimmingPercent;
+    std::string line;
+    while (std::getline(input, line)) {
+        if (line.rfind("outside_dimming_percent=", 0) == 0) {
+            std::istringstream value(line.substr(24));
+            value >> outsideDimmingPercent;
+        }
+    }
+    selectionSettings_.outsideDimmingPercent = std::clamp(outsideDimmingPercent, 0, 70);
+}
+
+bool CaptureTargetPicker::SaveSelectionSettings() const {
+    const auto path = SelectionSettingsPath();
+    if (path.empty()) return false;
+    const std::filesystem::path temporary(path.wstring() + L".tmp");
+    {
+        std::ofstream output(temporary, std::ios::trunc);
+        if (!output) return false;
+        output << "outside_dimming_percent="
+               << selectionSettings_.outsideDimmingPercent << '\n';
+        if (!output) return false;
+    }
+    return MoveFileExW(temporary.c_str(), path.c_str(),
+                       MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
 }
 
 void CaptureTargetPicker::LoadPresets() {

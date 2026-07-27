@@ -103,11 +103,12 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
                                  std::string_view gifStatus,
                                   std::string_view outputDirectory,
                                   const std::vector<RecoverableRecordingUiItem>& recoverableRecordings,
-                                  const RecordingUiState& recording,
-                                  const HotkeyUiState& hotkeys,
-                                  const BorderUiState& border,
-                                  CaptureTargetPicker& picker, WindowsGraphicsCapture& capture,
-                                 HWND owner, ID3D11Device* device) {
+                                   const RecordingUiState& recording,
+                                   const HotkeyUiState& hotkeys,
+                                   const BorderUiState& border,
+                                   const RegionSelectionUiState& regionSelection,
+                                   CaptureTargetPicker& picker, WindowsGraphicsCapture& capture,
+                                   ID3D11Device* device) {
     MainPanelCommand command{};
     const bool mediaBusy = recording.mediaJobActive;
     const bool outputBusy = recording.active || mediaBusy;
@@ -155,7 +156,7 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     ImGui::RadioButton("Monitor", &targetType, 2);
     ExplainLastItem("Capture one entire monitor.");
     if (ImGui::Button("Select capture target", ImVec2(220.0F, 0.0F))) {
-        if (targetType == static_cast<int>(CaptureTargetType::Region)) picker.SelectRegion(owner);
+        if (targetType == static_cast<int>(CaptureTargetType::Region)) command.selectRegion = true;
         else { picker.Refresh(); ImGui::OpenPopup("Capture target"); }
     }
     ExplainLastItem("Choose the window, region, or monitor used by screenshots, video, and GIF recording.");
@@ -201,6 +202,28 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
         command.resetBorderSettings = true;
     }
     ExplainLastItem("Restore visible, 3 px, and 85% opacity.");
+
+    ImGui::Spacing();
+    ImGui::SeparatorText("Region selection appearance");
+    static bool regionSelectionSettingsInitialized = false;
+    static int outsideDimmingPercent = 30;
+    if (!regionSelectionSettingsInitialized) {
+        outsideDimmingPercent = regionSelection.outsideDimmingPercent;
+        regionSelectionSettingsInitialized = true;
+    }
+    ImGui::SliderInt("Selection outside dimming", &outsideDimmingPercent, 0, 70, "%d%%");
+    ExplainLastItem("Dims only the area outside a region selection. The selected area stays clear.");
+    if (ImGui::SmallButton("Apply selection appearance")) {
+        command.applyRegionSelectionSettings = true;
+        command.regionOutsideDimmingPercent = outsideDimmingPercent;
+    }
+    ExplainLastItem("Apply and save the region selection screen brightness.");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Reset selection appearance")) {
+        outsideDimmingPercent = 30;
+        command.resetRegionSelectionSettings = true;
+    }
+    ExplainLastItem("Restore 30% outside dimming.");
 
     static int selectedPreset = -1;
     const auto& presets = picker.Presets();
