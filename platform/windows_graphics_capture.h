@@ -31,6 +31,7 @@ public:
     void RequestBorderlessAccess();
     void Stop() noexcept;
     [[nodiscard]] std::optional<CapturedFrame> TryPopFrame();
+    bool WaitForFrame(std::uint32_t timeoutMilliseconds) const noexcept;
 
     [[nodiscard]] bool IsRunning() const noexcept;
     [[nodiscard]] std::uint64_t FrameCount() const noexcept;

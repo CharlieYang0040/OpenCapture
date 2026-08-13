@@ -33,6 +33,13 @@ IDirect3DDevice CreateDirect3DDevice(ID3D11Device* device) {
     return inspectable.as<IDirect3DDevice>();
 }
 
+std::int64_t HundredNanosecondsToQpc(std::int64_t value, std::int64_t frequency) noexcept {
+    if (value <= 0 || frequency <= 0) return 0;
+    constexpr std::int64_t unitsPerSecond = 10'000'000;
+    return (value / unitsPerSecond) * frequency +
+           (value % unitsPerSecond) * frequency / unitsPerSecond;
+}
+
 GraphicsCaptureItem CreateCaptureItem(const CaptureTarget& target) {
     auto interop = winrt::get_activation_factory<GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
     GraphicsCaptureItem item{nullptr};
@@ -49,6 +56,8 @@ GraphicsCaptureItem CreateCaptureItem(const CaptureTarget& target) {
 } // namespace
 
 struct WindowsGraphicsCapture::Impl {
+    Impl() : frameReadyEvent(CreateEventW(nullptr, FALSE, FALSE, nullptr)) {}
+
     ~Impl() {
         try {
             if (borderlessOperation) {
@@ -57,6 +66,7 @@ struct WindowsGraphicsCapture::Impl {
             }
         } catch (...) {
         }
+        if (frameReadyEvent) CloseHandle(frameReadyEvent);
     }
 
     void RequestBorderlessAccess() {
@@ -125,8 +135,11 @@ struct WindowsGraphicsCapture::Impl {
             contentSize = SIZE{initialSize.Width, initialSize.Height};
             activeTarget = target;
             frames.Clear();
+            LARGE_INTEGER frequency{};
+            QueryPerformanceFrequency(&frequency);
+            qpcFrequency = frequency.QuadPart;
             framePool = Direct3D11CaptureFramePool::CreateFreeThreaded(
-                direct3DDevice, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, initialSize);
+                direct3DDevice, DirectXPixelFormat::B8G8R8A8UIntNormalized, 3, initialSize);
             frameToken = framePool.FrameArrived({this, &Impl::OnFrameArrived});
             closedToken = item.Closed({this, &Impl::OnTargetClosed});
             session = framePool.CreateCaptureSession(item);
@@ -180,19 +193,24 @@ struct WindowsGraphicsCapture::Impl {
             CapturedFrame captured{};
             winrt::check_hresult(access->GetInterface(IID_PPV_ARGS(&captured.texture)));
             captured.contentSize = SIZE{size.Width, size.Height};
-            LARGE_INTEGER qpc{};
-            QueryPerformanceCounter(&qpc);
-            captured.qpcTimestamp = qpc.QuadPart;
+            captured.qpcTimestamp = HundredNanosecondsToQpc(
+                frame.SystemRelativeTime().count(), qpcFrequency);
+            if (captured.qpcTimestamp <= 0) {
+                LARGE_INTEGER qpc{};
+                QueryPerformanceCounter(&qpc);
+                captured.qpcTimestamp = qpc.QuadPart;
+            }
             lastFrameQpc.store(captured.qpcTimestamp, std::memory_order_relaxed);
             frameCount.fetch_add(1, std::memory_order_relaxed);
             if (frames.PushDropOldest(std::move(captured))) {
                 droppedFrameCount.fetch_add(1, std::memory_order_relaxed);
             }
+            if (frameReadyEvent) SetEvent(frameReadyEvent);
 
             if (size.Width > 0 && size.Height > 0 &&
                 (size.Width != contentSize.cx || size.Height != contentSize.cy)) {
                 contentSize = SIZE{size.Width, size.Height};
-                sender.Recreate(direct3DDevice, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, size);
+                sender.Recreate(direct3DDevice, DirectXPixelFormat::B8G8R8A8UIntNormalized, 3, size);
             }
         } catch (const winrt::hresult_error& error) {
             SetError(winrt::to_string(error.message()));
@@ -235,12 +253,14 @@ struct WindowsGraphicsCapture::Impl {
     winrt::event_token frameToken{};
     winrt::event_token closedToken{};
     BoundedQueue<CapturedFrame> frames{3};
+    HANDLE frameReadyEvent{};
     CaptureTarget activeTarget{};
     SIZE contentSize{};
     std::atomic_bool running{};
     std::atomic_uint64_t frameCount{};
     std::atomic_uint64_t droppedFrameCount{};
     std::atomic_int64_t lastFrameQpc{};
+    std::int64_t qpcFrequency{};
     std::atomic_bool borderlessRequestStarted{};
     std::atomic_bool borderlessAllowed{};
     winrt::Windows::Foundation::IAsyncOperation<AppCapabilityAccessStatus>
@@ -259,6 +279,10 @@ void WindowsGraphicsCapture::RequestBorderlessAccess() { impl_->RequestBorderles
 
 void WindowsGraphicsCapture::Stop() noexcept { impl_->Stop(); }
 std::optional<CapturedFrame> WindowsGraphicsCapture::TryPopFrame() { return impl_->frames.TryPop(); }
+bool WindowsGraphicsCapture::WaitForFrame(std::uint32_t timeoutMilliseconds) const noexcept {
+    return impl_->frameReadyEvent &&
+           WaitForSingleObject(impl_->frameReadyEvent, timeoutMilliseconds) == WAIT_OBJECT_0;
+}
 bool WindowsGraphicsCapture::IsRunning() const noexcept { return impl_->running.load(std::memory_order_acquire); }
 std::uint64_t WindowsGraphicsCapture::FrameCount() const noexcept { return impl_->frameCount.load(std::memory_order_relaxed); }
 std::uint64_t WindowsGraphicsCapture::DroppedFrameCount() const noexcept { return impl_->droppedFrameCount.load(std::memory_order_relaxed); }

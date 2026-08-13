@@ -62,6 +62,7 @@ private:
     void CleanupRenderTarget();
     void HandleDeviceFailure(HRESULT result);
     void ProcessCaptureFrames();
+    void PumpRealtimePipeline();
     bool ProcessRecordingFrame(CapturedFrame frame);
     bool ProcessScreenshotFrame(const CapturedFrame& frame);
     bool SendRecordingFrame(const ProcessedFrame& frame, std::int64_t presentationTimestamp);
@@ -176,6 +177,10 @@ private:
     std::int64_t recordingPauseStartQpc_{};
     std::int64_t recordingLastPts_{-1};
     std::uint64_t recordingFrameCount_{};
+    std::uint64_t recordingSourceFrameCount_{};
+    std::uint64_t recordingSkippedFrameTicks_{};
+    std::int64_t recordingPreviousSourceQpc_{};
+    double recordingMaximumSourceGapMilliseconds_{};
     double recordingElapsedSeconds_{};
     CaptureTargetPicker targetPicker_;
     CaptureTargetOverlay targetOverlay_;

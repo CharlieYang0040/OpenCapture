@@ -63,6 +63,15 @@ void TestQpcTimestampConversion() {
           "paused QPC duration is removed from the active timeline");
     Check(opencapture::ActiveQpcDelta(5, 10) == 0,
           "paused QPC duration cannot make the active timeline negative");
+
+    const auto first = opencapture::SelectCurrentFramePts(0, 10'000'000, 60, -1);
+    Check(first.emit && first.presentationTimestamp == 0 && first.skippedTicks == 0,
+          "first video frame starts at zero without a skipped tick");
+    const auto late = opencapture::SelectCurrentFramePts(10'000'000, 10'000'000, 60, 0);
+    Check(late.emit && late.presentationTimestamp == 60 && late.skippedTicks == 59,
+          "late video work jumps to the current timestamp instead of emitting a catch-up burst");
+    const auto duplicate = opencapture::SelectCurrentFramePts(10'000'000, 10'000'000, 60, 60);
+    Check(!duplicate.emit, "a second frame in the same output tick is ignored");
 }
 
 void TestCaptureTarget() {
