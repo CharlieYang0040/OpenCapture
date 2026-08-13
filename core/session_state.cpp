@@ -15,6 +15,15 @@ std::int64_t ActiveQpcDelta(std::int64_t totalDelta, std::int64_t pausedDuration
     return std::max<std::int64_t>(0, totalDelta - std::max<std::int64_t>(0, pausedDuration));
 }
 
+FramePtsDecision SelectCurrentFramePts(std::int64_t qpcDelta, std::int64_t qpcFrequency,
+                                       int framesPerSecond, std::int64_t lastPts) noexcept {
+    const auto target = QpcDeltaToFramePts(qpcDelta, qpcFrequency, framesPerSecond);
+    if (target <= lastPts) return {};
+    const auto firstMissing = std::max<std::int64_t>(0, lastPts + 1);
+    const auto skipped = target > firstMissing ? target - firstMissing : 0;
+    return {true, target, static_cast<std::uint64_t>(skipped)};
+}
+
 SessionPhase SessionState::Phase() const noexcept {
     std::scoped_lock lock(mutex_);
     return phase_;

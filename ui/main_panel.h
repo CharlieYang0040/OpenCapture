@@ -29,6 +29,11 @@ struct RecordingUiState {
     std::string_view error;
     std::string_view encoderName;
     std::uint64_t frameCount{};
+    std::uint64_t sourceFrameCount{};
+    std::uint64_t skippedFrameTicks{};
+    std::uint64_t captureDroppedFrameCount{};
+    std::size_t muxQueuePeak{};
+    double maximumSourceGapMilliseconds{};
     double elapsedSeconds{};
 };
 

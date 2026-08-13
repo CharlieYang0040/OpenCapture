@@ -460,19 +460,37 @@ bool Win32D3D11App::Initialize(HINSTANCE instance, int showCommand) {
 
 int Win32D3D11App::Run() {
     MSG message{};
-    while (message.message != WM_QUIT) {
-        if (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+    ULONGLONG nextRealtimeUiFrame{};
+    bool quitting{};
+    while (!quitting) {
+        while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+            if (message.message == WM_QUIT) {
+                quitting = true;
+                break;
+            }
             TranslateMessage(&message);
             DispatchMessageW(&message);
-        } else {
-            const bool backgroundIdle = window_ && !IsWindowVisible(window_) &&
-                !RecordingActive() && !pendingScreenshot_ && !mediaJobRunning_;
-            const bool hasPendingHotkey = pendingHotkeyActions_ != 0;
-            if (backgroundIdle && !hasPendingHotkey) {
-                WaitMessage();
-            } else {
+        }
+        if (quitting) break;
+        const bool backgroundIdle = window_ && !IsWindowVisible(window_) &&
+            !RecordingActive() && !pendingScreenshot_ && !mediaJobRunning_;
+        const bool hasPendingHotkey = pendingHotkeyActions_ != 0;
+        if (backgroundIdle && !hasPendingHotkey) {
+            WaitMessage();
+        } else if (RecordingActive() || pendingScreenshot_) {
+            PumpRealtimePipeline();
+            const ULONGLONG now = GetTickCount64();
+            const bool windowVisible = window_ && IsWindowVisible(window_);
+            if (now >= nextRealtimeUiFrame || hasPendingHotkey) {
                 Render();
+                // Hidden/tray recording still needs periodic command, safety-limit,
+                // and smoke-test handling, but not a full-rate UI render.
+                nextRealtimeUiFrame = now + (windowVisible ? 16 : 100);
+            } else {
+                capture_.WaitForFrame(5);
             }
+        } else {
+            Render();
         }
     }
     return captureSmokeFailed_ ? 2 : static_cast<int>(message.wParam);
@@ -1287,6 +1305,10 @@ bool Win32D3D11App::StartRecording(int framesPerSecond, int quality, std::string
     }
     recordingFramesPerSecond_ = std::clamp(framesPerSecond, 1, 120);
     recordingFrameCount_ = 0;
+    recordingSourceFrameCount_ = 0;
+    recordingSkippedFrameTicks_ = 0;
+    recordingPreviousSourceQpc_ = 0;
+    recordingMaximumSourceGapMilliseconds_ = 0.0;
     recordingElapsedSeconds_ = 0.0;
     recordingStartQpc_ = 0;
     recordingPausedQpc_ = 0;
@@ -1480,18 +1502,24 @@ bool Win32D3D11App::ProcessRecordingFrame(CapturedFrame frame) {
         }
         recordingState_.MarkRecording();
     }
-    const auto delta = EffectiveRecordingDelta(frame.qpcTimestamp);
-    std::int64_t pts = QpcDeltaToFramePts(delta, recordingQpcFrequency_, recordingFramesPerSecond_);
-    if (processedFrame_) {
-        while (recordingLastPts_ + 1 < pts) {
-            if (!SendRecordingFrame(*processedFrame_, recordingLastPts_ + 1)) return false;
-        }
+    ++recordingSourceFrameCount_;
+    if (recordingPreviousSourceQpc_ > 0 && recordingQpcFrequency_ > 0 &&
+        frame.qpcTimestamp > recordingPreviousSourceQpc_) {
+        const auto gap = static_cast<double>(frame.qpcTimestamp - recordingPreviousSourceQpc_) * 1000.0 /
+                         static_cast<double>(recordingQpcFrequency_);
+        recordingMaximumSourceGapMilliseconds_ = std::max(recordingMaximumSourceGapMilliseconds_, gap);
     }
-    if (pts <= recordingLastPts_) {
+    recordingPreviousSourceQpc_ = frame.qpcTimestamp;
+    const auto delta = EffectiveRecordingDelta(frame.qpcTimestamp);
+    const auto decision = SelectCurrentFramePts(
+        delta, recordingQpcFrequency_, recordingFramesPerSecond_, recordingLastPts_);
+    if (!decision.emit) {
         recordingElapsedSeconds_ = static_cast<double>(delta) / static_cast<double>(recordingQpcFrequency_);
+        processedFrame_ = std::move(processed);
         return true;
     }
-    if (!SendRecordingFrame(*processed, pts)) return false;
+    recordingSkippedFrameTicks_ += decision.skippedTicks;
+    if (!SendRecordingFrame(*processed, decision.presentationTimestamp)) return false;
     recordingElapsedSeconds_ = static_cast<double>(delta) / static_cast<double>(recordingQpcFrequency_);
     processedFrame_ = std::move(processed);
     return true;
@@ -1507,7 +1535,8 @@ std::int64_t Win32D3D11App::EffectiveRecordingDelta(std::int64_t qpc) const noex
 
 bool Win32D3D11App::SendRecordingFrame(const ProcessedFrame& frame, std::int64_t presentationTimestamp) {
     if (!videoEncoder_.Send(frame, presentationTimestamp)) {
-        FailRecording(videoEncoder_.LastError());
+        const auto muxError = muxer_.LastError();
+        FailRecording(muxError.empty() ? videoEncoder_.LastError() : muxError);
         return false;
     }
     recordingLastPts_ = presentationTimestamp;
@@ -1520,11 +1549,11 @@ void Win32D3D11App::PumpRecordingClock() {
     LARGE_INTEGER now{};
     QueryPerformanceCounter(&now);
     const auto delta = EffectiveRecordingDelta(now.QuadPart);
-    const auto desiredPts = QpcDeltaToFramePts(delta, recordingQpcFrequency_, recordingFramesPerSecond_);
-    int emitted{};
-    while (recordingLastPts_ < desiredPts && emitted < 4) {
-        if (!SendRecordingFrame(*processedFrame_, recordingLastPts_ + 1)) return;
-        ++emitted;
+    const auto decision = SelectCurrentFramePts(
+        delta, recordingQpcFrequency_, recordingFramesPerSecond_, recordingLastPts_);
+    if (decision.emit) {
+        recordingSkippedFrameTicks_ += decision.skippedTicks;
+        if (!SendRecordingFrame(*processedFrame_, decision.presentationTimestamp)) return;
     }
     recordingElapsedSeconds_ = static_cast<double>(delta) / static_cast<double>(recordingQpcFrequency_);
 }
@@ -1562,7 +1591,8 @@ void Win32D3D11App::PumpRecordingAudio(bool finalDrain) {
     const auto frameSize = static_cast<std::uint32_t>(audioEncoder_.FrameSize());
     while (audioMixer_.Pop(availableThrough, frameSize, chunk)) {
         if (!audioEncoder_.Send(chunk.stereoSamples, chunk.presentationTimestamp)) {
-            FailRecording(audioEncoder_.LastError());
+            const auto muxError = muxer_.LastError();
+            FailRecording(muxError.empty() ? audioEncoder_.LastError() : muxError);
             return;
         }
     }
@@ -1659,7 +1689,9 @@ bool Win32D3D11App::RunEncoderFallbackSmoke() {
     }
     videoEncoder_.SetPacketCallback([this](AVPacket* packet) { return muxer_.WriteVideoPacket(packet); });
     audioEncoder_.SetPacketCallback([this](AVPacket* packet) { return muxer_.WriteAudioPacket(packet); });
-    for (std::int64_t pts = 0; pts < 60; ++pts) {
+    const auto smokeFrames = static_cast<std::int64_t>(
+        std::clamp(ReadEnvironmentInt(L"OPENCAPTURE_SMOKE_FRAMES", 60), 1, 3'600));
+    for (std::int64_t pts = 0; pts < smokeFrames; ++pts) {
         if (!videoEncoder_.Send(frame, pts)) {
             frameProcessingError_ = videoEncoder_.LastError();
             muxer_.Close();
@@ -1670,7 +1702,9 @@ bool Win32D3D11App::RunEncoderFallbackSmoke() {
     if (avMuxSmokeMode_) {
         const int audioFrameSize = audioEncoder_.FrameSize();
         std::vector<float> silence(static_cast<std::size_t>(audioFrameSize) * 2);
-        for (std::int64_t audioFrame = 0; audioFrame < 47; ++audioFrame) {
+        const auto audioFrames = (smokeFrames * AudioTimelineMixer::SampleRate +
+                                  60LL * audioFrameSize - 1) / (60LL * audioFrameSize);
+        for (std::int64_t audioFrame = 0; audioFrame < audioFrames; ++audioFrame) {
             if (!audioEncoder_.Send(silence, audioFrame * audioFrameSize)) {
                 frameProcessingError_ = audioEncoder_.LastError();
                 muxer_.Close();
@@ -1840,11 +1874,19 @@ void Win32D3D11App::ProcessCaptureFrames() {
     }
 }
 
-void Win32D3D11App::Render() {
-    PollMediaJob();
+void Win32D3D11App::PumpRealtimePipeline() {
     ProcessCaptureFrames();
     PumpRecordingClock();
     PumpRecordingAudio();
+    if (recordingGif_ && recordingState_.Phase() == SessionPhase::Recording &&
+        recordingElapsedSeconds_ >= gifDurationLimit_) {
+        gifStatus_ = "GIF safety limit reached; creating the GIF...";
+        StopRecording();
+    }
+}
+
+void Win32D3D11App::Render() {
+    PollMediaJob();
     RefreshWindowDpi();
     if (uiScaleDirty_) ApplyUiScale();
     ImGui_ImplDX11_NewFrame();
@@ -1864,7 +1906,9 @@ void Win32D3D11App::Render() {
         canRemux, mediaJobRunning_.load(),
         mediaWorker_.joinable() && mediaWorker_.get_stop_token().stop_requested(),
         mediaProgress_.load(), recordingPath_, recordingError,
-        activeEncoderName_, recordingFrameCount_, recordingElapsedSeconds_};
+        activeEncoderName_, recordingFrameCount_, recordingSourceFrameCount_,
+        recordingSkippedFrameTicks_, capture_.DroppedFrameCount(), muxer_.MaxQueuedPacketCount(),
+        recordingMaximumSourceGapMilliseconds_, recordingElapsedSeconds_};
     std::vector<EncoderUiChoice> encoderChoices;
     for (const auto& capability : encoderRegistry_.Capabilities()) {
         if (capability.codec == VideoCodecFamily::H264) {
@@ -2031,12 +2075,6 @@ void Win32D3D11App::Render() {
     if ((hotkeyActions & (1U << static_cast<unsigned>(HotkeyAction::QuickCapture))) != 0) {
         StartQuickCapture();
     }
-    if (recordingGif_ && recordingState_.Phase() == SessionPhase::Recording &&
-        recordingElapsedSeconds_ >= gifDurationLimit_) {
-        gifStatus_ = "GIF safety limit reached; creating the GIF...";
-        StopRecording();
-    }
-
     CaptureOverlayState overlayState = CaptureOverlayState::Idle;
     const auto currentPhase = recordingState_.Phase();
     if (currentPhase == SessionPhase::Paused) {
@@ -2108,7 +2146,9 @@ void Win32D3D11App::Render() {
     context_->OMSetRenderTargets(1, renderTarget_.GetAddressOf(), nullptr);
     context_->ClearRenderTargetView(renderTarget_.Get(), clearColor);
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-    const HRESULT presentResult = swapChain_->Present(1, 0);
+    const UINT syncInterval = (RecordingActive() || pendingScreenshot_ ||
+                               (window_ && !IsWindowVisible(window_))) ? 0U : 1U;
+    const HRESULT presentResult = swapChain_->Present(syncInterval, 0);
     if (presentResult == DXGI_ERROR_DEVICE_REMOVED || presentResult == DXGI_ERROR_DEVICE_RESET ||
         presentResult == DXGI_ERROR_DEVICE_HUNG) {
         HandleDeviceFailure(presentResult);

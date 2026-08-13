@@ -728,8 +728,21 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
                         mediaBusy);
     }
     if (recording.active || !recording.outputPath.empty()) {
-        ImGui::Text("Recorded: %llu frames | %.2f s",
-                    static_cast<unsigned long long>(recording.frameCount), recording.elapsedSeconds);
+        ImGui::Text("Encoded: %llu | source: %llu | skipped ticks: %llu | %.2f s",
+                    static_cast<unsigned long long>(recording.frameCount),
+                    static_cast<unsigned long long>(recording.sourceFrameCount),
+                    static_cast<unsigned long long>(recording.skippedFrameTicks),
+                    recording.elapsedSeconds);
+        ExplainLastItem("Skipped ticks are timeline slots the recorder did not encode while it was late. "
+                        "They expose real capture or encoder stalls instead of hiding them with duplicate-frame bursts.");
+        const double sourceFps = recording.elapsedSeconds > 0.0
+            ? static_cast<double>(recording.sourceFrameCount) / recording.elapsedSeconds : 0.0;
+        ImGui::Text("Source: %.1f fps | max gap: %.1f ms | capture drops: %llu | mux peak: %zu",
+                    sourceFps, recording.maximumSourceGapMilliseconds,
+                    static_cast<unsigned long long>(recording.captureDroppedFrameCount),
+                    recording.muxQueuePeak);
+        ExplainLastItem("A growing mux peak points to slow storage. Capture drops or a large source gap point "
+                        "to capture/GPU scheduling pressure before encoding.");
         ImGui::TextWrapped("Output: %.*s", static_cast<int>(recording.outputPath.size()), recording.outputPath.data());
         if (!recording.encoderName.empty()) {
             ImGui::Text("Active encoder: %.*s", static_cast<int>(recording.encoderName.size()), recording.encoderName.data());
