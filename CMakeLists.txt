@@ -19,6 +19,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(opencapture_core STATIC
     core/capture_target.cpp
+    core/hotkey.cpp
+    core/recording_options.cpp
     core/screenshot_options.cpp
     core/session_state.cpp
     core/ui_scale.cpp

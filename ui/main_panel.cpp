@@ -1,5 +1,6 @@
 #include "ui/main_panel.h"
 
+#include "core/recording_options.h"
 #include "platform/capture_target_picker.h"
 #include "platform/windows_graphics_capture.h"
 
@@ -11,6 +12,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -111,9 +113,8 @@ struct MainPanelState {
     int quality{1};
     bool systemAudio{true};
     bool microphone{};
-    std::array<int, 4> modifierSelections{};
-    std::array<int, 4> keySelections{};
-    bool hotkeySelectionsInitialized{};
+    bool recordingSettingsInitialized{};
+    bool encoderSelectionPending{};
     bool screenshotDestinationInitialized{};
     int screenshotDestination{};
     bool traySettingsInitialized{};
@@ -126,6 +127,53 @@ struct MainPanelState {
 MainPanelState& PanelState() {
     static MainPanelState state;
     return state;
+}
+
+void ApplyRecordingPreferences(MainPanelState& panel, const RecordingPreferences& preferences,
+                               bool includeVideo, bool includeGif) {
+    if (includeVideo) {
+        panel.fps = preferences.framesPerSecond;
+        panel.quality = preferences.quality;
+        panel.format = preferences.remuxToMp4 ? 1 : 0;
+        panel.systemAudio = preferences.systemAudio;
+        panel.microphone = preferences.microphone;
+        panel.encoderSelectionPending = true;
+    }
+    if (includeGif) {
+        panel.gifFpsIndex = GifFpsIndex(preferences.gifFramesPerSecond);
+        panel.gifHeightIndex = GifHeightIndex(preferences.gifHeight);
+        panel.gifColorIndex = GifColorIndex(preferences.gifColors);
+    }
+}
+
+void ResetPanelPreferences(MainPanelState& panel) {
+    panel.uiScalePercent = 100;
+    panel.borderVisible = true;
+    panel.borderThickness = 3;
+    panel.borderOpacity = 85;
+    panel.outsideDimmingPercent = 30;
+    panel.screenshotDestination = 0;
+    panel.closeToTray = false;
+    panel.selectedEncoder = 0;
+    ApplyRecordingPreferences(panel, DefaultRecordingPreferences(), true, true);
+    panel.encoderSelectionPending = false;
+}
+
+std::string SelectedEncoderName(const MainPanelState& panel,
+                                const std::vector<EncoderUiChoice>& encoderChoices) {
+    if (panel.selectedEncoder <= 0) return {};
+    const auto index = static_cast<std::size_t>(panel.selectedEncoder - 1);
+    if (index >= encoderChoices.size()) return {};
+    return std::string(encoderChoices[index].name);
+}
+
+int EncoderSelectionIndex(const std::vector<EncoderUiChoice>& encoderChoices,
+                          std::string_view encoderName) {
+    if (encoderName.empty()) return 0;
+    for (std::size_t index = 0; index < encoderChoices.size(); ++index) {
+        if (encoderChoices[index].name == encoderName) return static_cast<int>(index + 1);
+    }
+    return 0;
 }
 
 } // namespace
@@ -143,6 +191,7 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
                                   std::string_view outputDirectory,
                                   const std::vector<RecoverableRecordingUiItem>& recoverableRecordings,
                                    const RecordingUiState& recording,
+                                   const RecordingPreferences& recordingPreferences,
                                    const HotkeyUiState& hotkeys,
                                    const BorderUiState& border,
                                    const RegionSelectionUiState& regionSelection,
@@ -153,6 +202,17 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
                                    ID3D11Device* device) {
     MainPanelCommand command{};
     auto& panel = PanelState();
+    if (!panel.recordingSettingsInitialized) {
+        ApplyRecordingPreferences(panel, recordingPreferences, true, true);
+        panel.recordingSettingsInitialized = true;
+    }
+    if (panel.encoderSelectionPending) {
+        panel.selectedEncoder = EncoderSelectionIndex(encoderChoices, recordingPreferences.encoderName);
+        if (recordingPreferences.encoderName.empty() || panel.selectedEncoder > 0 ||
+            !encoderChoices.empty()) {
+            panel.encoderSelectionPending = false;
+        }
+    }
     const bool mediaBusy = recording.mediaJobActive;
     const bool outputBusy = recording.active || mediaBusy;
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -237,13 +297,17 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     ExplainLastItem("Auto selects the best available hardware encoder. A manual choice is useful for compatibility testing.");
     ImGui::SameLine();
     if (ImGui::BeginCombo("##VideoEncoder", encoderPreview)) {
-        if (ImGui::Selectable("Auto (recommended)", panel.selectedEncoder == 0)) panel.selectedEncoder = 0;
+        if (ImGui::Selectable("Auto (recommended)", panel.selectedEncoder == 0)) {
+            panel.selectedEncoder = 0;
+            command.applyRecordingSettings = true;
+        }
         for (std::size_t index = 0; index < encoderChoices.size(); ++index) {
             const auto& choice = encoderChoices[index];
             if (!choice.usable) ImGui::BeginDisabled();
             const bool selected = panel.selectedEncoder == static_cast<int>(index + 1);
             if (ImGui::Selectable(choice.displayName.data(), selected) && choice.usable) {
                 panel.selectedEncoder = static_cast<int>(index + 1);
+                command.applyRecordingSettings = true;
             }
             if (ImGui::IsItemHovered() && !choice.detail.empty()) ImGui::SetTooltip("%.*s", static_cast<int>(choice.detail.size()), choice.detail.data());
             if (!choice.usable) ImGui::EndDisabled();
@@ -482,20 +546,25 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     constexpr std::array formats{"MKV / H.264", "MP4 copy / H.264"};
     constexpr std::array qualities{"Performance", "Balanced", "Quality"};
     if (panel.activeTab == 1) {
-    ImGui::Combo("Format", &panel.format, formats.data(), static_cast<int>(formats.size()));
+    if (ImGui::Combo("Format", &panel.format, formats.data(), static_cast<int>(formats.size()))) {
+        command.applyRecordingSettings = true;
+    }
     ExplainLastItem("MKV is written safely while recording. MP4 copy remuxes the completed MKV without re-encoding.");
     ImGui::SliderInt("FPS", &panel.fps, 15, 120);
+    if (ImGui::IsItemDeactivatedAfterEdit()) command.applyRecordingSettings = true;
     ExplainLastItem("Higher FPS makes motion smoother but increases encoder load and file size.");
-    ImGui::Combo("Quality", &panel.quality, qualities.data(), static_cast<int>(qualities.size()));
+    if (ImGui::Combo("Quality", &panel.quality, qualities.data(), static_cast<int>(qualities.size()))) {
+        command.applyRecordingSettings = true;
+    }
     ExplainLastItem("Performance reduces recording overhead; Quality uses a higher bitrate and creates larger files.");
     command.framesPerSecond = panel.fps;
     command.quality = panel.quality;
     command.remuxToMp4 = panel.format == 1;
 
-    ImGui::Checkbox("System audio", &panel.systemAudio);
+    if (ImGui::Checkbox("System audio", &panel.systemAudio)) command.applyRecordingSettings = true;
     ExplainLastItem("Include sound played by Windows applications in video recordings. GIF never includes audio.");
     ImGui::SameLine();
-    ImGui::Checkbox("Microphone", &panel.microphone);
+    if (ImGui::Checkbox("Microphone", &panel.microphone)) command.applyRecordingSettings = true;
     ExplainLastItem("Include the default microphone in video recordings. GIF never includes audio.");
     ImGui::SameLine();
     bool cursorIncluded = true;
@@ -507,6 +576,14 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
         true);
     command.systemAudio = panel.systemAudio;
     command.microphone = panel.microphone;
+    if (ImGui::SmallButton("Restore Default")) {
+        ApplyRecordingPreferences(panel, DefaultRecordingPreferences(), true, false);
+        panel.selectedEncoder = 0;
+        panel.encoderSelectionPending = false;
+        command.resetVideoSettings = true;
+        command.applyRecordingSettings = true;
+    }
+    ExplainLastItem("Restore 60 FPS, balanced quality, MKV, Auto encoder, system audio on, and microphone off.");
     if (!audioStatus.empty()) {
         ImGui::TextWrapped("Audio: %.*s", static_cast<int>(audioStatus.size()), audioStatus.data());
     }
@@ -516,6 +593,13 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     command.remuxToMp4 = panel.format == 1;
     command.systemAudio = panel.systemAudio;
     command.microphone = panel.microphone;
+    command.encoderName = SelectedEncoderName(panel, encoderChoices);
+    command.gifFramesPerSecond = kGifFpsChoices[static_cast<std::size_t>(
+        std::clamp(panel.gifFpsIndex, 0, static_cast<int>(kGifFpsChoices.size()) - 1))];
+    command.gifHeight = kGifHeightChoices[static_cast<std::size_t>(
+        std::clamp(panel.gifHeightIndex, 0, static_cast<int>(kGifHeightChoices.size()) - 1))];
+    command.gifColors = kGifColorChoices[static_cast<std::size_t>(
+        std::clamp(panel.gifColorIndex, 0, static_cast<int>(kGifColorChoices.size()) - 1))];
 
     if (panel.activeTab == 3) {
     ImGui::Spacing();
@@ -551,77 +635,58 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
 
     ImGui::Spacing();
     ImGui::SeparatorText("Global shortcuts");
-    ImGui::TextWrapped("These shortcuts work while OpenCapture is in the background.");
+    ImGui::TextWrapped("Click Set shortcut, then press the key combination you want. Shortcuts require Ctrl, Alt, or Shift.");
     constexpr std::array hotkeyActionNames{
         "Capture selected target",
         "Start / stop video",
         "Start / stop GIF",
         "Quick Capture",
     };
-    constexpr std::array modifierLabels{
-        "Ctrl + Shift", "Ctrl + Alt", "Alt + Shift", "Ctrl + Alt + Shift",
-    };
-    constexpr std::array<UINT, 4> modifierValues{
-        MOD_CONTROL | MOD_SHIFT,
-        MOD_CONTROL | MOD_ALT,
-        MOD_ALT | MOD_SHIFT,
-        MOD_CONTROL | MOD_ALT | MOD_SHIFT,
-    };
-    constexpr std::array keyLabels{
-        "F1", "F2", "F3", "F4", "F5", "F6",
-        "F7", "F8", "F9", "F10", "F11", "F12",
-    };
-    constexpr std::array<UINT, 12> keyValues{
-        VK_F1, VK_F2, VK_F3, VK_F4, VK_F5, VK_F6,
-        VK_F7, VK_F8, VK_F9, VK_F10, VK_F11, VK_F12,
-    };
-    if (!panel.hotkeySelectionsInitialized) {
-        for (std::size_t action = 0; action < hotkeyActionNames.size(); ++action) {
-            const auto modifier = std::find(modifierValues.begin(), modifierValues.end(),
-                                            hotkeys.modifiers[action]);
-            const auto key = std::find(keyValues.begin(), keyValues.end(),
-                                       hotkeys.virtualKeys[action]);
-            panel.modifierSelections[action] = modifier == modifierValues.end()
-                ? 0 : static_cast<int>(std::distance(modifierValues.begin(), modifier));
-            panel.keySelections[action] = key == keyValues.end()
-                ? 0 : static_cast<int>(std::distance(keyValues.begin(), key));
-        }
-        panel.hotkeySelectionsInitialized = true;
-    }
     for (std::size_t action = 0; action < hotkeyActionNames.size(); ++action) {
         ImGui::PushID(static_cast<int>(action));
-        ImGui::Text("%s  (current: %s)", hotkeyActionNames[action],
-                    hotkeys.labels[action].c_str());
-        ImGui::SetNextItemWidth(150.0F);
-        ImGui::Combo("##Modifiers", &panel.modifierSelections[action],
-                     modifierLabels.data(), static_cast<int>(modifierLabels.size()));
-        ExplainLastItem("Choose modifier keys. OpenCapture requires modifiers to avoid intercepting normal typing.");
+        const bool capturing = hotkeys.capturingAction == static_cast<int>(action);
+        ImGui::Text("%s", hotkeyActionNames[action]);
         ImGui::SameLine();
-        ImGui::SetNextItemWidth(85.0F);
-        ImGui::Combo("##Key", &panel.keySelections[action],
-                     keyLabels.data(), static_cast<int>(keyLabels.size()));
-        ExplainLastItem("Choose a function key. Registration will fail safely if Windows or another app already uses it.");
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Apply")) {
-            command.changeHotkeyAction = static_cast<int>(action);
-            command.hotkeyModifiers =
-                modifierValues[static_cast<std::size_t>(panel.modifierSelections[action])];
-            command.hotkeyVirtualKey =
-                keyValues[static_cast<std::size_t>(panel.keySelections[action])];
+        ImGui::TextDisabled("(%s)", hotkeys.labels[action].c_str());
+        if (capturing) {
+            ImGui::TextColored(ImVec4(1.0F, 0.82F, 0.35F, 1.0F),
+                               "Press a key combination... Esc cancels.");
         }
-        ExplainLastItem("Register this shortcut globally and save it for the next app launch.");
+        if (ImGui::SmallButton(capturing ? "Listening..." : "Set shortcut")) {
+            if (capturing) command.cancelHotkeyCapture = true;
+            else command.listenHotkeyAction = static_cast<int>(action);
+        }
+        ExplainLastItem(capturing
+                            ? "Press Esc or click again to cancel without changing the shortcut."
+                            : "Capture the next key combination, including letters, numbers, and function keys.");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Clear")) command.clearHotkeyAction = static_cast<int>(action);
+        ExplainLastItem("Remove this global shortcut until you assign a new one.");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Restore Default")) {
+            command.resetHotkeyAction = static_cast<int>(action);
+        }
+        ExplainLastItem("Restore this action to its original OpenCapture shortcut.");
         ImGui::PopID();
     }
     if (ImGui::SmallButton("Restore default shortcuts")) {
         command.resetHotkeys = true;
-        panel.modifierSelections = {0, 0, 0, 0};
-        panel.keySelections = {8, 9, 10, 7};
+        command.cancelHotkeyCapture = true;
     }
-    ExplainLastItem("Restore F9 screenshot, F10 video, F11 GIF, and F8 Quick Capture defaults.");
+    ExplainLastItem("Restore Ctrl+Shift+F9 screenshot, F10 video, F11 GIF, and F8 Quick Capture.");
     if (!hotkeys.error.empty()) {
         ImGui::TextColored(ImVec4(1.0F, 0.55F, 0.25F, 1.0F), "%.*s",
                            static_cast<int>(hotkeys.error.size()), hotkeys.error.data());
     }
+
+    ImGui::Spacing();
+    ImGui::SeparatorText("Reset");
+    if (ImGui::Button("Restore Default")) {
+        ResetPanelPreferences(panel);
+        command.resetAllSettings = true;
+        command.cancelHotkeyCapture = true;
+    }
+    ExplainLastItem("Restore shortcuts, video, GIF, screenshot, display, border, region selection, and background settings.");
 
     ImGui::Spacing();
     ImGui::SeparatorText("Diagnostics");
@@ -771,13 +836,27 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     ImGui::SeparatorText("GIF size controls");
     ImGui::TextWrapped("Lower resolution, FPS, and color count create much smaller GIF files. Recording stops automatically at 30 seconds or the safe pixel budget.");
     if (outputBusy) ImGui::BeginDisabled();
-    ImGui::Combo("GIF FPS", &panel.gifFpsIndex, gifFpsLabels.data(), static_cast<int>(gifFpsLabels.size()));
+    if (ImGui::Combo("GIF FPS", &panel.gifFpsIndex, gifFpsLabels.data(), static_cast<int>(gifFpsLabels.size()))) {
+        command.applyRecordingSettings = true;
+    }
     ExplainLastItem("Lower FPS greatly reduces GIF size. 12 fps is the recommended default.", outputBusy);
-    ImGui::Combo("GIF resolution", &panel.gifHeightIndex, gifHeightLabels.data(), static_cast<int>(gifHeightLabels.size()));
+    if (ImGui::Combo("GIF resolution", &panel.gifHeightIndex, gifHeightLabels.data(), static_cast<int>(gifHeightLabels.size()))) {
+        command.applyRecordingSettings = true;
+    }
     ExplainLastItem("Limits output height while preserving aspect ratio. Lower resolution creates a much smaller GIF.", outputBusy);
-    ImGui::Combo("GIF colors", &panel.gifColorIndex, gifColorLabels.data(), static_cast<int>(gifColorLabels.size()));
+    if (ImGui::Combo("GIF colors", &panel.gifColorIndex, gifColorLabels.data(), static_cast<int>(gifColorLabels.size()))) {
+        command.applyRecordingSettings = true;
+    }
     ExplainLastItem("Fewer palette colors reduce file size but may introduce visible banding.", outputBusy);
     if (outputBusy) ImGui::EndDisabled();
+    if (!outputBusy && ImGui::SmallButton("Restore Default")) {
+        ApplyRecordingPreferences(panel, DefaultRecordingPreferences(), false, true);
+        command.resetGifSettings = true;
+        command.applyRecordingSettings = true;
+    }
+    if (!outputBusy) {
+        ExplainLastItem("Restore 12 fps, 720p, and 256 colors.");
+    }
     command.gifFramesPerSecond = gifFpsValues[static_cast<std::size_t>(panel.gifFpsIndex)];
     command.gifHeight = gifHeightValues[static_cast<std::size_t>(panel.gifHeightIndex)];
     command.gifColors = gifColorValues[static_cast<std::size_t>(panel.gifColorIndex)];
