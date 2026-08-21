@@ -295,8 +295,11 @@ void Win32D3D11App::CompleteHotkeyCapture(HotkeyChord chord) {
     if (capturingHotkeyAction_ < 0) return;
     const auto action = static_cast<HotkeyAction>(capturingHotkeyAction_);
     capturingHotkeyAction_ = -1;
-    globalHotkeys_.SetBinding(action, chord);
+    // Restore the existing registrations before replacing one binding. SetBinding
+    // can then ask Windows to register the candidate and roll back atomically when
+    // another application already owns the shortcut.
     globalHotkeys_.Resume();
+    globalHotkeys_.SetBinding(action, chord);
 }
 
 bool Win32D3D11App::HandleHotkeyCaptureMessage(UINT message, WPARAM wParam, LPARAM lParam) {
