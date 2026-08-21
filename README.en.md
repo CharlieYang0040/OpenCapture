@@ -58,6 +58,8 @@ Implemented:
 - Capture-excluded blue idle, yellow capture, and orange paused border states
 - Persistent target-border visibility, 1-12 px thickness, and 20-100% opacity controls
 - Configurable capture, video, and GIF global shortcuts with conflict and repeat protection
+- Direct keyboard shortcut capture with clear, restore-default, and restart persistence
+- Persistent video FPS, quality, encoder, audio, and GIF size settings with Restore Default
 - Result-oriented tooltips for primary actions and performance/size controls
 - Adaptive UI that follows 100-200% monitor DPI with a persistent 75-200% user adjustment
 - Configurable shortcut output: clipboard, PNG file, or both

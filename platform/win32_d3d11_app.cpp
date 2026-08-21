@@ -22,6 +22,7 @@ extern "C" {
 #include <iterator>
 #include <sstream>
 #include <stdexcept>
+#include <utility>
 #include <winrt/base.h>
 #include <dwmapi.h>
 #include <ShlObj.h>
@@ -129,6 +130,12 @@ std::filesystem::path TraySettingsPath() {
     return path;
 }
 
+std::filesystem::path RecordingSettingsPath() {
+    auto path = OutputSettingsPath();
+    if (!path.empty()) path.replace_filename(L"recording_settings.txt");
+    return path;
+}
+
 bool SameCaptureTarget(const CaptureTarget& left, const CaptureTarget& right) noexcept {
     if (left.type != right.type) return false;
     switch (left.type) {
@@ -205,6 +212,133 @@ bool Win32D3D11App::SaveTraySettings() const {
     }
     return MoveFileExW(temporary.c_str(), path.c_str(),
                        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
+}
+
+void Win32D3D11App::LoadRecordingSettings() {
+    std::ifstream input(RecordingSettingsPath());
+    if (!input) return;
+    std::ostringstream text;
+    text << input.rdbuf();
+    recordingPreferences_ = ParseRecordingPreferences(text.str());
+}
+
+bool Win32D3D11App::SaveRecordingSettings() const {
+    const auto path = RecordingSettingsPath();
+    if (path.empty()) return false;
+    const std::filesystem::path temporary(path.wstring() + L".tmp");
+    {
+        std::ofstream output(temporary, std::ios::trunc);
+        if (!output) return false;
+        output << SerializeRecordingPreferences(recordingPreferences_);
+        if (!output) return false;
+    }
+    return MoveFileExW(temporary.c_str(), path.c_str(),
+                       MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
+}
+
+void Win32D3D11App::ApplyRecordingPreferencesFromCommand(const MainPanelCommand& command) {
+    RecordingPreferences next = ClampRecordingPreferences({
+        command.framesPerSecond,
+        command.quality,
+        command.remuxToMp4,
+        command.systemAudio,
+        command.microphone,
+        command.encoderName,
+        command.gifFramesPerSecond,
+        command.gifHeight,
+        command.gifColors,
+    });
+    if (next == recordingPreferences_) return;
+    const auto previous = recordingPreferences_;
+    recordingPreferences_ = std::move(next);
+    if (!SaveRecordingSettings()) {
+        recordingPreferences_ = previous;
+    }
+}
+
+void Win32D3D11App::ResetAllSettings() {
+    CancelHotkeyCapture();
+    SetUiScalePercent(100);
+    targetOverlay_.ResetSettings();
+    targetOverlayStatus_ = targetOverlay_.LastError();
+    targetPicker_.ResetSelectionSettings();
+    screenshotHotkeyDestination_ = ScreenshotDestination::Clipboard;
+    if (SaveScreenshotSettings()) {
+        screenshotStatus_ = "Screenshot shortcut result restored to clipboard.";
+    }
+    const bool previousTray = closeToTray_;
+    closeToTray_ = false;
+    if (SaveTraySettings()) {
+        trayStatus_ = "Closing the window now exits OpenCapture.";
+    } else {
+        closeToTray_ = previousTray;
+        trayStatus_ = "Background setting could not be saved.";
+    }
+    recordingPreferences_ = DefaultRecordingPreferences();
+    SaveRecordingSettings();
+    globalHotkeys_.ResetDefaults();
+}
+
+void Win32D3D11App::BeginHotkeyCapture(int action) {
+    if (action < 0 || action >= static_cast<int>(HotkeyAction::Count)) return;
+    capturingHotkeyAction_ = action;
+    globalHotkeys_.Suspend();
+}
+
+void Win32D3D11App::CancelHotkeyCapture() {
+    if (capturingHotkeyAction_ < 0) return;
+    capturingHotkeyAction_ = -1;
+    globalHotkeys_.Resume();
+}
+
+void Win32D3D11App::CompleteHotkeyCapture(HotkeyChord chord) {
+    if (capturingHotkeyAction_ < 0) return;
+    const auto action = static_cast<HotkeyAction>(capturingHotkeyAction_);
+    capturingHotkeyAction_ = -1;
+    globalHotkeys_.SetBinding(action, chord);
+    globalHotkeys_.Resume();
+}
+
+bool Win32D3D11App::HandleHotkeyCaptureMessage(UINT message, WPARAM wParam, LPARAM lParam) {
+    if (capturingHotkeyAction_ < 0) return false;
+    if (message == WM_KILLFOCUS ||
+        (message == WM_ACTIVATE && LOWORD(wParam) == WA_INACTIVE)) {
+        CancelHotkeyCapture();
+        return false;
+    }
+    switch (message) {
+    case WM_KEYUP:
+    case WM_SYSKEYUP:
+    case WM_CHAR:
+    case WM_SYSCHAR:
+    case WM_DEADCHAR:
+    case WM_SYSDEADCHAR:
+        return true;
+    case WM_KEYDOWN:
+    case WM_SYSKEYDOWN:
+        break;
+    default:
+        return false;
+    }
+    if ((lParam & (1 << 30)) != 0) return true;
+    const auto virtualKey = static_cast<unsigned>(wParam);
+    if (IsModifierVirtualKey(virtualKey)) return true;
+    const bool controlDown = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    const bool altDown = (GetKeyState(VK_MENU) & 0x8000) != 0;
+    const bool shiftDown = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+    if (IsHotkeyCaptureCancelKey(virtualKey) && !controlDown && !altDown && !shiftDown) {
+        CancelHotkeyCapture();
+        return true;
+    }
+    unsigned modifiers = 0;
+    if (controlDown) modifiers |= kHotkeyModControl;
+    if (altDown) modifiers |= kHotkeyModAlt;
+    if (shiftDown) modifiers |= kHotkeyModShift;
+    if ((GetKeyState(VK_LWIN) & 0x8000) != 0 || (GetKeyState(VK_RWIN) & 0x8000) != 0) {
+        modifiers |= kHotkeyModWin;
+    }
+    CompleteHotkeyCapture({modifiers, virtualKey});
+    return true;
 }
 
 void Win32D3D11App::ShowMainWindow() {
@@ -284,6 +418,7 @@ bool Win32D3D11App::Initialize(HINSTANCE instance, int showCommand) {
     LoadUiScaleSettings();
     LoadScreenshotSettings();
     LoadTraySettings();
+    LoadRecordingSettings();
     winrt::init_apartment(winrt::apartment_type::single_threaded);
     captureSmokeMode_ = std::wcsstr(GetCommandLineW(), L"--wgc-smoke") != nullptr;
     gpuCropSmokeMode_ = std::wcsstr(GetCommandLineW(), L"--gpu-crop-smoke") != nullptr;
@@ -1918,11 +2053,10 @@ void Win32D3D11App::Render() {
     HotkeyUiState hotkeyUi{};
     const auto& hotkeyBindings = globalHotkeys_.Bindings();
     for (std::size_t index = 0; index < hotkeyBindings.size(); ++index) {
-        hotkeyUi.modifiers[index] = hotkeyBindings[index].modifiers;
-        hotkeyUi.virtualKeys[index] = hotkeyBindings[index].virtualKey;
         hotkeyUi.labels[index] = globalHotkeys_.Label(static_cast<HotkeyAction>(index));
     }
     hotkeyUi.error = globalHotkeys_.LastError();
+    hotkeyUi.capturingAction = capturingHotkeyAction_;
     const auto& borderSettings = targetOverlay_.Settings();
     const BorderUiState borderUi{
         borderSettings.visible,
@@ -1956,7 +2090,7 @@ void Win32D3D11App::Render() {
                                          screenshotStatus_, overlayStatus, audioStatus_, recoveryStatus_, remuxStatus_, gifStatus_,
                                          outputDirectoryUtf8_,
                                          recoverableRecordings_,
-                                         recordingUi, hotkeyUi, borderUi, regionSelectionUi, displayUi,
+                                         recordingUi, recordingPreferences_, hotkeyUi, borderUi, regionSelectionUi, displayUi,
                                          screenshotUi, trayUi,
                                          targetPicker_, capture_, device_.Get());
     if (command.applyUiScale) {
@@ -2011,22 +2145,38 @@ void Win32D3D11App::Render() {
     if (command.resetRegionSelectionSettings) {
         targetPicker_.ResetSelectionSettings();
     }
+    if (command.cancelHotkeyCapture) CancelHotkeyCapture();
+    if (command.listenHotkeyAction >= 0) {
+        BeginHotkeyCapture(command.listenHotkeyAction);
+    }
     if (command.changeHotkeyAction >= 0 &&
         command.changeHotkeyAction < static_cast<int>(HotkeyAction::Count)) {
         globalHotkeys_.SetBinding(
             static_cast<HotkeyAction>(command.changeHotkeyAction),
             {command.hotkeyModifiers, command.hotkeyVirtualKey});
     }
+    if (command.clearHotkeyAction >= 0 &&
+        command.clearHotkeyAction < static_cast<int>(HotkeyAction::Count)) {
+        globalHotkeys_.ClearBinding(static_cast<HotkeyAction>(command.clearHotkeyAction));
+    }
+    if (command.resetHotkeyAction >= 0 &&
+        command.resetHotkeyAction < static_cast<int>(HotkeyAction::Count)) {
+        globalHotkeys_.ResetBinding(static_cast<HotkeyAction>(command.resetHotkeyAction));
+    }
     if (command.resetHotkeys) globalHotkeys_.ResetDefaults();
+    if (command.applyRecordingSettings) ApplyRecordingPreferencesFromCommand(command);
+    if (command.resetAllSettings) ResetAllSettings();
     if (command.chooseOutputDirectory && !RecordingActive() && !mediaJobRunning_) ChooseOutputDirectory();
     if (command.recoverRecordingIndex >= 0) {
         RecoverRecording(static_cast<std::size_t>(command.recoverRecordingIndex));
     }
     if (command.startRecording && !mediaJobRunning_) {
+        ApplyRecordingPreferencesFromCommand(command);
         StartRecording(command.framesPerSecond, command.quality, command.encoderName,
                        command.systemAudio, command.microphone, command.remuxToMp4);
     }
     if (command.startGif && !mediaJobRunning_) {
+        ApplyRecordingPreferencesFromCommand(command);
         StartRecording(command.gifFramesPerSecond, 0, command.encoderName,
                        false, false, false, true, command.gifHeight, command.gifColors);
     }
@@ -2191,14 +2341,15 @@ void Win32D3D11App::Shutdown() {
 }
 
 void Win32D3D11App::HandleHotkey(HotkeyAction action) {
-    if (regionSelectionActive_) return;
+    if (regionSelectionActive_ || capturingHotkeyAction_ >= 0) return;
     pendingHotkeyActions_ |= 1U << static_cast<unsigned>(action);
 }
 
 LRESULT CALLBACK Win32D3D11App::WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
-    if (ImGui::GetCurrentContext() && ImGui_ImplWin32_WndProcHandler(window, message, wParam, lParam)) return 1;
     auto* app = reinterpret_cast<Win32D3D11App*>(
         GetWindowLongPtrW(window, GWLP_USERDATA));
+    if (app && app->HandleHotkeyCaptureMessage(message, wParam, lParam)) return 0;
+    if (ImGui::GetCurrentContext() && ImGui_ImplWin32_WndProcHandler(window, message, wParam, lParam)) return 1;
     if (app && app->systemTray_.TaskbarCreatedMessage() != 0 &&
         message == app->systemTray_.TaskbarCreatedMessage()) {
         app->trayStatus_ = app->systemTray_.Restore()

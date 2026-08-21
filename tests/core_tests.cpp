@@ -1,5 +1,7 @@
 #include "core/bounded_queue.h"
 #include "core/capture_target.h"
+#include "core/hotkey.h"
+#include "core/recording_options.h"
 #include "core/screenshot_options.h"
 #include "core/session_state.h"
 #include "core/ui_scale.h"
@@ -156,6 +158,108 @@ void TestUiScale() {
           "user UI scale multiplies the Windows monitor scale");
 }
 
+void TestHotkeyChords() {
+    using opencapture::HotkeyChord;
+    using opencapture::HotkeyLabel;
+    using opencapture::IsAssignableHotkeyKey;
+    using opencapture::IsModifierVirtualKey;
+    using opencapture::IsValidHotkeyChord;
+    using opencapture::kHotkeyModAlt;
+    using opencapture::kHotkeyModControl;
+    using opencapture::kHotkeyModShift;
+    using opencapture::kHotkeyModWin;
+    using opencapture::NormalizeHotkeyChord;
+    using opencapture::VirtualKeyLabel;
+
+    Check(IsModifierVirtualKey(0x11) && IsModifierVirtualKey(0xA2),
+          "control keys are modifiers");
+    Check(!IsAssignableHotkeyKey(0x11) && !IsAssignableHotkeyKey(0x14),
+          "modifiers and lock keys are not assignable");
+    Check(IsAssignableHotkeyKey(0x70) && IsAssignableHotkeyKey('A') &&
+              IsAssignableHotkeyKey(0x20),
+          "function, letter, and space keys are assignable");
+    Check(IsValidHotkeyChord({}), "an unbound shortcut is valid");
+    Check(!IsValidHotkeyChord({0, 0x78}), "a shortcut without modifiers is rejected");
+    Check(IsValidHotkeyChord({kHotkeyModControl | kHotkeyModShift, 0x78}),
+          "Ctrl+Shift+F9 is valid");
+    Check(IsValidHotkeyChord({kHotkeyModAlt | kHotkeyModWin, 'S'}),
+          "Alt+Win+S is valid because it includes a required modifier");
+    Check(HotkeyLabel({}) == "Not set", "unbound shortcuts use a clear label");
+    Check(HotkeyLabel({kHotkeyModControl | kHotkeyModShift, 0x78}) == "Ctrl+Shift+F9",
+          "saved function-key shortcuts keep their previous labels");
+    Check(HotkeyLabel({kHotkeyModControl | kHotkeyModAlt, 'Q'}) == "Ctrl+Alt+Q",
+          "letter shortcuts can be captured outside the old F-key list");
+    Check(HotkeyLabel({kHotkeyModShift, 0x2C}) == "Shift+Print Screen",
+          "Print Screen can be used with a modifier");
+    Check(VirtualKeyLabel(0x25) == "Left", "arrow keys have readable names");
+    const auto normalized = NormalizeHotkeyChord({0x4002, 'G'});
+    Check(normalized.modifiers == kHotkeyModControl && normalized.virtualKey == 'G',
+          "repeat and unknown modifier bits are stripped");
+}
+
+void TestRecordingPreferences() {
+    using opencapture::ClampRecordingPreferences;
+    using opencapture::DefaultRecordingPreferences;
+    using opencapture::GifColorIndex;
+    using opencapture::GifFpsIndex;
+    using opencapture::GifHeightIndex;
+    using opencapture::ParseRecordingPreferences;
+    using opencapture::RecordingPreferences;
+    using opencapture::SerializeRecordingPreferences;
+
+    const auto defaults = DefaultRecordingPreferences();
+    Check(defaults.framesPerSecond == 60 && defaults.quality == 1 && defaults.systemAudio,
+          "recording defaults match the previous UI values");
+    Check(defaults.gifFramesPerSecond == 12 && defaults.gifHeight == 720 &&
+              defaults.gifColors == 256,
+          "GIF defaults match the previous UI values");
+
+    RecordingPreferences custom = defaults;
+    custom.framesPerSecond = 90;
+    custom.quality = 2;
+    custom.remuxToMp4 = true;
+    custom.systemAudio = false;
+    custom.microphone = true;
+    custom.encoderName = "h264_nvenc";
+    custom.gifFramesPerSecond = 15;
+    custom.gifHeight = 480;
+    custom.gifColors = 128;
+    const auto restored = ParseRecordingPreferences(SerializeRecordingPreferences(custom));
+    Check(restored == custom, "recording preferences round-trip through the settings file");
+
+    const auto clamped = ClampRecordingPreferences(RecordingPreferences{
+        8, 9, false, true, false, "bad\nname\r", 14, 500, 100});
+    Check(clamped.framesPerSecond == 15 && clamped.quality == 2,
+          "video settings clamp to the supported range");
+    Check(clamped.gifFramesPerSecond == 15 && clamped.gifHeight == 480 &&
+              clamped.gifColors == 128,
+          "GIF settings snap to the nearest allowed choice");
+    Check(clamped.encoderName == "badname", "encoder names cannot contain newlines");
+    Check(GifFpsIndex(12) == 2 && GifHeightIndex(720) == 2 && GifColorIndex(256) == 3,
+          "GIF combo indexes match the previous default selections");
+
+    const auto parsed = ParseRecordingPreferences(
+        "# comment\n"
+        "fps=48\n"
+        "quality=0\n"
+        "remux_to_mp4=1\n"
+        "system_audio=0\n"
+        "microphone=true\n"
+        "encoder=h264_qsv\n"
+        "gif_fps=20\n"
+        "gif_height=1080\n"
+        "gif_colors=64\n"
+        "unknown=ignored\n");
+    Check(parsed.framesPerSecond == 48 && parsed.quality == 0 && parsed.remuxToMp4 &&
+              !parsed.systemAudio && parsed.microphone && parsed.encoderName == "h264_qsv",
+          "known recording settings are restored and unknown keys are ignored");
+    Check(parsed.gifFramesPerSecond == 20 && parsed.gifHeight == 1080 &&
+              parsed.gifColors == 64,
+          "GIF settings are restored from disk");
+    Check(ParseRecordingPreferences("fps=not-a-number\nquality=1\n").framesPerSecond == 60,
+          "invalid recording values keep the safe default");
+}
+
 void TestScreenshotDestinationSettings() {
     using opencapture::ParseScreenshotDestination;
     using opencapture::ScreenshotDestination;
@@ -186,6 +290,8 @@ int main() {
     TestRegionSelectionBounds();
     TestOutputSizeNormalization();
     TestUiScale();
+    TestHotkeyChords();
+    TestRecordingPreferences();
     TestScreenshotDestinationSettings();
     if (failures == 0) std::cout << "All OpenCapture core tests passed.\n";
     return failures == 0 ? 0 : 1;

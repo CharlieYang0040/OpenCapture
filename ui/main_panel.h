@@ -5,8 +5,8 @@
 #include <string>
 #include <string_view>
 #include <vector>
-#include <Windows.h>
 
+#include "core/recording_options.h"
 #include "core/screenshot_options.h"
 
 struct ID3D11Device;
@@ -51,10 +51,9 @@ struct RecoverableRecordingUiItem {
 };
 
 struct HotkeyUiState {
-    std::array<UINT, 4> modifiers{};
-    std::array<UINT, 4> virtualKeys{};
     std::array<std::string, 4> labels{};
     std::string_view error;
+    int capturingAction{-1};
 };
 
 struct ScreenshotUiState {
@@ -102,9 +101,13 @@ struct MainPanelCommand {
     bool quickCapture{};
     bool applyScreenshotShortcutDestination{};
     bool applyCloseToTray{};
+    int listenHotkeyAction{-1};
+    bool cancelHotkeyCapture{};
     int changeHotkeyAction{-1};
-    UINT hotkeyModifiers{};
-    UINT hotkeyVirtualKey{};
+    unsigned hotkeyModifiers{};
+    unsigned hotkeyVirtualKey{};
+    int clearHotkeyAction{-1};
+    int resetHotkeyAction{-1};
     bool resetHotkeys{};
     bool applyBorderSettings{};
     bool resetBorderSettings{};
@@ -112,6 +115,10 @@ struct MainPanelCommand {
     bool resetRegionSelectionSettings{};
     bool applyUiScale{};
     bool resetUiScale{};
+    bool applyRecordingSettings{};
+    bool resetVideoSettings{};
+    bool resetGifSettings{};
+    bool resetAllSettings{};
     bool borderVisible{true};
     int borderThickness{3};
     int borderOpacityPercent{85};
@@ -144,14 +151,15 @@ public:
                                  std::string_view outputDirectory,
                                  const std::vector<RecoverableRecordingUiItem>& recoverableRecordings,
                                  const RecordingUiState& recording,
-                                  const HotkeyUiState& hotkeys,
-                                  const BorderUiState& border,
-                                  const RegionSelectionUiState& regionSelection,
-                                  const DisplayUiState& display,
-                                  const ScreenshotUiState& screenshot,
-                                  const TrayUiState& tray,
-                                  CaptureTargetPicker& picker, WindowsGraphicsCapture& capture,
-                                  ID3D11Device* device);
+                                 const RecordingPreferences& recordingPreferences,
+                                 const HotkeyUiState& hotkeys,
+                                 const BorderUiState& border,
+                                 const RegionSelectionUiState& regionSelection,
+                                 const DisplayUiState& display,
+                                 const ScreenshotUiState& screenshot,
+                                 const TrayUiState& tray,
+                                 CaptureTargetPicker& picker, WindowsGraphicsCapture& capture,
+                                 ID3D11Device* device);
 };
 
 } // namespace opencapture

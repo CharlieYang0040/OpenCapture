@@ -13,6 +13,8 @@
 #include "encoder/ffmpeg_encoder_registry.h"
 #include "encoder/ffmpeg_muxer.h"
 #include "encoder/ffmpeg_gif_converter.h"
+#include "core/hotkey.h"
+#include "core/recording_options.h"
 #include "core/session_state.h"
 #include "core/ui_scale.h"
 #include "platform/capture_target_overlay.h"
@@ -104,6 +106,14 @@ private:
     bool SaveScreenshotSettings() const;
     void LoadTraySettings();
     bool SaveTraySettings() const;
+    void LoadRecordingSettings();
+    bool SaveRecordingSettings() const;
+    void ApplyRecordingPreferencesFromCommand(const MainPanelCommand& command);
+    void ResetAllSettings();
+    void BeginHotkeyCapture(int action);
+    void CancelHotkeyCapture();
+    void CompleteHotkeyCapture(HotkeyChord chord);
+    bool HandleHotkeyCaptureMessage(UINT message, WPARAM wParam, LPARAM lParam);
     void ShowMainWindow();
     void ApplyUiScale();
     bool SetUiScalePercent(int percent);
@@ -187,6 +197,8 @@ private:
     GlobalHotkeys globalHotkeys_;
     SystemTray systemTray_;
     std::uint32_t pendingHotkeyActions_{};
+    int capturingHotkeyAction_{-1};
+    RecordingPreferences recordingPreferences_{};
     bool regionSelectionActive_{};
     bool closeToTray_{};
     bool exitRequested_{};
