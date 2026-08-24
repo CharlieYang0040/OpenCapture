@@ -35,6 +35,13 @@ namespace opencapture {
 namespace {
 
 constexpr wchar_t kWindowClass[] = L"OpenCaptureWindow";
+constexpr ULONGLONG kOccludedUiIntervalMs = 100;
+
+[[nodiscard]] bool WindowShowsInteractiveUi(HWND window) noexcept {
+    // Minimized windows keep WS_VISIBLE, so IsWindowVisible stays TRUE. DXGI also
+    // stops waiting for vsync while occluded, which would otherwise busy-loop Present.
+    return window != nullptr && IsWindowVisible(window) != FALSE && IsIconic(window) == FALSE;
+}
 
 std::string ToUtf8(const wchar_t* text) {
     const int length = static_cast<int>(std::wcslen(text));
@@ -610,20 +617,32 @@ int Win32D3D11App::Run() {
             DispatchMessageW(&message);
         }
         if (quitting) break;
-        const bool backgroundIdle = window_ && !IsWindowVisible(window_) &&
+        const bool uiVisible = WindowShowsInteractiveUi(window_);
+        const bool backgroundIdle = window_ && !uiVisible &&
             !RecordingActive() && !pendingScreenshot_ && !mediaJobRunning_;
         const bool hasPendingHotkey = pendingHotkeyActions_ != 0;
         if (backgroundIdle && !hasPendingHotkey) {
-            WaitMessage();
+            if (IsIconic(window_)) {
+                const ULONGLONG now = GetTickCount64();
+                if (now >= nextRealtimeUiFrame) {
+                    Render();
+                    nextRealtimeUiFrame = now + kOccludedUiIntervalMs;
+                } else {
+                    MsgWaitForMultipleObjects(0, nullptr, FALSE,
+                                              static_cast<DWORD>(nextRealtimeUiFrame - now),
+                                              QS_ALLINPUT);
+                }
+            } else {
+                WaitMessage();
+            }
         } else if (RecordingActive() || pendingScreenshot_) {
             PumpRealtimePipeline();
             const ULONGLONG now = GetTickCount64();
-            const bool windowVisible = window_ && IsWindowVisible(window_);
             if (now >= nextRealtimeUiFrame || hasPendingHotkey) {
                 Render();
-                // Hidden/tray recording still needs periodic command, safety-limit,
-                // and smoke-test handling, but not a full-rate UI render.
-                nextRealtimeUiFrame = now + (windowVisible ? 16 : 100);
+                // Hidden, minimized, or tray recording still needs periodic command,
+                // safety-limit, and smoke-test handling, but not a full-rate UI render.
+                nextRealtimeUiFrame = now + (uiVisible ? 16 : kOccludedUiIntervalMs);
             } else {
                 capture_.WaitForFrame(5);
             }
@@ -2300,7 +2319,7 @@ void Win32D3D11App::Render() {
     context_->ClearRenderTargetView(renderTarget_.Get(), clearColor);
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
     const UINT syncInterval = (RecordingActive() || pendingScreenshot_ ||
-                               (window_ && !IsWindowVisible(window_))) ? 0U : 1U;
+                               !WindowShowsInteractiveUi(window_)) ? 0U : 1U;
     const HRESULT presentResult = swapChain_->Present(syncInterval, 0);
     if (presentResult == DXGI_ERROR_DEVICE_REMOVED || presentResult == DXGI_ERROR_DEVICE_RESET ||
         presentResult == DXGI_ERROR_DEVICE_HUNG) {
