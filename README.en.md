@@ -68,6 +68,7 @@ Implemented:
 - Opt-in notification-area background operation with configurable close behavior
 - Notification-area actions for opening the app, Quick Capture, stopping a recording, and fully exiting
 - Company-PC-friendly default that fully exits when a new user closes the window
+- Idle wait while minimized or hidden in the notification area to avoid extra CPU use
 - Bounded queue with a drop-oldest overload policy
 - Core unit tests and Windows GitHub Actions CI
 
