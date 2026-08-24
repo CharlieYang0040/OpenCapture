@@ -6,8 +6,8 @@ OpenCapture는 Windows 10/11을 위한 네이티브 화면 캡처 애플리케�
 
 현재는 활발히 개발 중인 기술 시제품 단계입니다. 창·모니터·영역을 Windows Graphics Capture로 받아 D3D11에서 자르기와 크기 조절을 수행하고, H.264/AAC MKV·MP4, 팔레트 최적화 GIF 또는 PNG·클립보드 캡처로 출력할 수 있습니다.
 
-최신 기술 프리뷰는 [OpenCapture v0.2.2](https://github.com/CharlieYang0040/OpenCapture/releases/tag/v0.2.2)이며,
-상세 변경 및 검증 범위는 [v0.2.2 릴리스 노트](docs/releases/v0.2.2.md)에 기록합니다.
+최신 기술 프리뷰는 [OpenCapture v0.2.3](https://github.com/CharlieYang0040/OpenCapture/releases/tag/v0.2.3)이며,
+상세 변경 및 검증 범위는 [v0.2.3 릴리스 노트](docs/releases/v0.2.3.md)에 기록합니다.
 
 ## 주요 목표
 
@@ -106,12 +106,12 @@ OpenCapture 자체에는 API 키나 계정 정보가 필요하지 않습니다. 
 
 ## 배포본 설치
 
-GitHub Releases에서 `OpenCapture-0.2.2-windows-x64.zip`과 `SHA256SUMS.txt`를 받은 뒤
+GitHub Releases에서 `OpenCapture-0.2.3-windows-x64.zip`과 `SHA256SUMS.txt`를 받은 뒤
 SHA-256을 확인하고 ZIP 전체를 한 폴더에 압축 해제합니다. DLL과 `licenses` 폴더를
 `OpenCapture.exe`와 같은 배포 구조로 유지해야 합니다. 이 기술 프리뷰는 아직
 Authenticode 서명되지 않았으므로 SmartScreen이나 회사 보안 정책이 경고할 수 있습니다.
 FFmpeg 대응 소스 링크, 실제 vcpkg 포트/패치와 빌드 설정은 배포 ZIP과 별도
-`OpenCapture-0.2.2-ffmpeg-build-materials.zip`에 함께 제공합니다.
+`OpenCapture-0.2.3-ffmpeg-build-materials.zip`에 함께 제공합니다.
 
 ## 새 PC에서 빠르게 시작하기
 
@@ -149,7 +149,7 @@ Release 빌드 또는 도구만 준비하려면 다음 옵션을 사용합니다
 검증된 배포 ZIP은 Release 빌드 후 다음 명령으로 재현합니다.
 
 ```powershell
-.\scripts\package_release.ps1 -Version 0.2.2
+.\scripts\package_release.ps1 -Version 0.2.3
 ```
 
 ### 빌드 흐름

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(OpenCapture VERSION 0.2.2 LANGUAGES CXX)
+project(OpenCapture VERSION 0.2.3 LANGUAGES CXX)
 
 if(NOT WIN32)
     message(FATAL_ERROR "OpenCapture is a Windows-only application")
