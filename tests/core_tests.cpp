@@ -224,6 +224,13 @@ void TestRecordingPreferences() {
     custom.gifFramesPerSecond = 15;
     custom.gifHeight = 480;
     custom.gifColors = 128;
+    custom.profile = opencapture::RecordingProfile::Custom;
+    custom.codec = opencapture::VideoCodecPreference::Hevc;
+    custom.resolution = opencapture::VideoResolutionLimit::Height720;
+    custom.efficiency = opencapture::EncoderEfficiencyMode::Efficient;
+    custom.customBitRateMbps = 4;
+    custom.allowCodecFallback = false;
+    custom.useCustomBitRate = true;
     const auto restored = ParseRecordingPreferences(SerializeRecordingPreferences(custom));
     Check(restored == custom, "recording preferences round-trip through the settings file");
 
@@ -258,6 +265,22 @@ void TestRecordingPreferences() {
           "GIF settings are restored from disk");
     Check(ParseRecordingPreferences("fps=not-a-number\nquality=1\n").framesPerSecond == 60,
           "invalid recording values keep the safe default");
+
+    auto compact = opencapture::ApplyRecordingProfile(defaults, opencapture::RecordingProfile::Compact);
+    Check(compact.codec == opencapture::VideoCodecPreference::Auto &&
+              compact.resolution == opencapture::VideoResolutionLimit::Height1080 &&
+              compact.efficiency == opencapture::EncoderEfficiencyMode::Efficient,
+          "compact profile selects modern codec, 1080p cap, and efficient encoding");
+    const auto compactH264 = opencapture::RecommendedVideoBitRate(
+        compact, 1920, 1080, opencapture::VideoCodecPreference::H264);
+    const auto compactHevc = opencapture::RecommendedVideoBitRate(
+        compact, 1920, 1080, opencapture::VideoCodecPreference::Hevc);
+    Check(compact.framesPerSecond == 30 && compactHevc < compactH264 && compactH264 == 3'500'000,
+          "compact profile uses 30 fps and accounts for codec efficiency");
+    Check(opencapture::ResolutionHeightLimit(opencapture::VideoResolutionLimit::Height720) == 720,
+          "video resolution limit resolves to an output height");
+    Check(opencapture::EstimatedRecordingBytesPerHour(6'000'000, true) == 2'786'400'000ULL,
+          "estimated size includes the default AAC stream");
 }
 
 void TestScreenshotDestinationSettings() {

@@ -97,7 +97,9 @@ void FFmpegEncoderRegistry::Probe(std::uint32_t d3dAdapterVendorId) {
             AVBufferRef* device{};
             const int result = av_hwdevice_ctx_create(&device, deviceType, nullptr, nullptr, 0);
             capability.deviceAvailable = result >= 0;
-            capability.detail = result >= 0 ? "hardware device initialized" : AvError(result);
+            capability.detail = result >= 0
+                ? "hardware device initialized; final encoder support is verified when recording starts"
+                : AvError(result);
             av_buffer_unref(&device);
         } else {
             capability.detail = "encoder registered";
@@ -124,6 +126,80 @@ std::vector<const EncoderCapability*> FFmpegEncoderRegistry::H264Candidates(
         result.push_back(&capability);
     }
     return result;
+}
+
+std::vector<const EncoderCapability*> FFmpegEncoderRegistry::Candidates(
+    VideoCodecPreference codec, std::string_view requestedName, bool allowCodecFallback) const {
+    std::vector<const EncoderCapability*> result;
+    auto append = [&](VideoCodecFamily family) {
+        for (const auto& capability : capabilities_) {
+            if (capability.codec != family || !capability.usable) continue;
+            if (!requestedName.empty() && capability.name != requestedName) continue;
+            result.push_back(&capability);
+        }
+    };
+
+    if (!requestedName.empty()) {
+        const EncoderCapability* requested{};
+        for (const auto& capability : capabilities_) {
+            if (capability.name != requestedName || !capability.usable) continue;
+            const auto requestedCodec = ToCodecPreference(capability.codec);
+            if (codec == VideoCodecPreference::Auto || codec == requestedCodec) {
+                requested = &capability;
+                result.push_back(&capability);
+            }
+        }
+        if (!requested || !allowCodecFallback) return result;
+
+        auto appendFallback = [&](VideoCodecFamily family) {
+            for (const auto& capability : capabilities_) {
+                if (capability.codec == family && capability.backend == requested->backend &&
+                    capability.usable) {
+                    result.push_back(&capability);
+                }
+            }
+            for (const auto& capability : capabilities_) {
+                if (capability.codec != family || capability.backend == requested->backend ||
+                    !capability.usable) continue;
+                result.push_back(&capability);
+            }
+        };
+        if (requested->codec == VideoCodecFamily::Av1) appendFallback(VideoCodecFamily::Hevc);
+        if (requested->codec != VideoCodecFamily::H264) appendFallback(VideoCodecFamily::H264);
+        return result;
+    }
+
+    switch (codec) {
+    case VideoCodecPreference::Auto:
+        append(VideoCodecFamily::Av1);
+        append(VideoCodecFamily::Hevc);
+        append(VideoCodecFamily::H264);
+        break;
+    case VideoCodecPreference::H264:
+        append(VideoCodecFamily::H264);
+        break;
+    case VideoCodecPreference::Hevc:
+        append(VideoCodecFamily::Hevc);
+        if (allowCodecFallback) append(VideoCodecFamily::H264);
+        break;
+    case VideoCodecPreference::Av1:
+        append(VideoCodecFamily::Av1);
+        if (allowCodecFallback) {
+            append(VideoCodecFamily::Hevc);
+            append(VideoCodecFamily::H264);
+        }
+        break;
+    }
+    return result;
+}
+
+VideoCodecPreference ToCodecPreference(VideoCodecFamily codec) noexcept {
+    switch (codec) {
+    case VideoCodecFamily::H264: return VideoCodecPreference::H264;
+    case VideoCodecFamily::Hevc: return VideoCodecPreference::Hevc;
+    case VideoCodecFamily::Av1: return VideoCodecPreference::Av1;
+    }
+    return VideoCodecPreference::H264;
 }
 
 std::string FFmpegEncoderRegistry::Summary() const {

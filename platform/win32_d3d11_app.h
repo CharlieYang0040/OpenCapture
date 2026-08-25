@@ -181,6 +181,10 @@ private:
     std::string activeEncoderName_;
     int recordingFramesPerSecond_{60};
     std::int64_t recordingBitRate_{10'000'000};
+    SIZE recordingOutputSize_{};
+    VideoCodecPreference recordingCodec_{VideoCodecPreference::H264};
+    EncoderEfficiencyMode recordingEfficiency_{EncoderEfficiencyMode::Realtime};
+    bool recordingAllowCodecFallback_{true};
     std::int64_t recordingQpcFrequency_{};
     std::int64_t recordingStartQpc_{};
     std::int64_t recordingPausedQpc_{};

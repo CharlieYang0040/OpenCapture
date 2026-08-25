@@ -36,6 +36,11 @@ bool ParseInt(std::string_view text, int& value) noexcept {
     return true;
 }
 
+template <typename Enum>
+Enum ClampEnum(int value, int maximum, Enum fallback) noexcept {
+    return value >= 0 && value <= maximum ? static_cast<Enum>(value) : fallback;
+}
+
 } // namespace
 
 RecordingPreferences DefaultRecordingPreferences() noexcept {
@@ -89,6 +94,15 @@ RecordingPreferences ClampRecordingPreferences(RecordingPreferences preferences)
         preferences.gifHeight, kGifHeightChoices.data(), kGifHeightChoices.size());
     preferences.gifColors = SnapToAllowedChoice(
         preferences.gifColors, kGifColorChoices.data(), kGifColorChoices.size());
+    preferences.profile = ClampEnum(static_cast<int>(preferences.profile), 3,
+                                    RecordingProfile::Compatibility);
+    preferences.codec = ClampEnum(static_cast<int>(preferences.codec), 3,
+                                  VideoCodecPreference::H264);
+    preferences.resolution = ClampEnum(static_cast<int>(preferences.resolution), 2,
+                                       VideoResolutionLimit::Source);
+    preferences.efficiency = ClampEnum(static_cast<int>(preferences.efficiency), 2,
+                                       EncoderEfficiencyMode::Realtime);
+    preferences.customBitRateMbps = std::clamp(preferences.customBitRateMbps, 1, 100);
     preferences.encoderName.erase(
         std::remove(preferences.encoderName.begin(), preferences.encoderName.end(), '\n'),
         preferences.encoderName.end());
@@ -129,6 +143,20 @@ RecordingPreferences ParseRecordingPreferences(std::string_view text,
             preferences.gifHeight = parsed;
         } else if (key == "gif_colors" && ParseInt(value, parsed)) {
             preferences.gifColors = parsed;
+        } else if (key == "profile" && ParseInt(value, parsed)) {
+            preferences.profile = static_cast<RecordingProfile>(parsed);
+        } else if (key == "codec" && ParseInt(value, parsed)) {
+            preferences.codec = static_cast<VideoCodecPreference>(parsed);
+        } else if (key == "resolution" && ParseInt(value, parsed)) {
+            preferences.resolution = static_cast<VideoResolutionLimit>(parsed);
+        } else if (key == "efficiency" && ParseInt(value, parsed)) {
+            preferences.efficiency = static_cast<EncoderEfficiencyMode>(parsed);
+        } else if (key == "custom_bitrate_mbps" && ParseInt(value, parsed)) {
+            preferences.customBitRateMbps = parsed;
+        } else if (key == "allow_codec_fallback") {
+            preferences.allowCodecFallback = ParseBool(value, preferences.allowCodecFallback);
+        } else if (key == "use_custom_bitrate") {
+            preferences.useCustomBitRate = ParseBool(value, preferences.useCustomBitRate);
         }
     }
     return ClampRecordingPreferences(std::move(preferences));
@@ -145,8 +173,83 @@ std::string SerializeRecordingPreferences(const RecordingPreferences& preference
            << "encoder=" << clamped.encoderName << '\n'
            << "gif_fps=" << clamped.gifFramesPerSecond << '\n'
            << "gif_height=" << clamped.gifHeight << '\n'
-           << "gif_colors=" << clamped.gifColors << '\n';
+           << "gif_colors=" << clamped.gifColors << '\n'
+           << "profile=" << static_cast<int>(clamped.profile) << '\n'
+           << "codec=" << static_cast<int>(clamped.codec) << '\n'
+           << "resolution=" << static_cast<int>(clamped.resolution) << '\n'
+           << "efficiency=" << static_cast<int>(clamped.efficiency) << '\n'
+           << "custom_bitrate_mbps=" << clamped.customBitRateMbps << '\n'
+           << "allow_codec_fallback=" << (clamped.allowCodecFallback ? 1 : 0) << '\n'
+           << "use_custom_bitrate=" << (clamped.useCustomBitRate ? 1 : 0) << '\n';
     return output.str();
+}
+
+RecordingPreferences ApplyRecordingProfile(RecordingPreferences preferences,
+                                            RecordingProfile profile) noexcept {
+    preferences.profile = profile;
+    preferences.useCustomBitRate = profile == RecordingProfile::Custom;
+    switch (profile) {
+    case RecordingProfile::Compatibility:
+        preferences.codec = VideoCodecPreference::H264;
+        preferences.resolution = VideoResolutionLimit::Source;
+        preferences.efficiency = EncoderEfficiencyMode::Realtime;
+        preferences.quality = 1;
+        break;
+    case RecordingProfile::Balanced:
+        preferences.codec = VideoCodecPreference::H264;
+        preferences.resolution = VideoResolutionLimit::Height1080;
+        preferences.efficiency = EncoderEfficiencyMode::Balanced;
+        preferences.quality = 1;
+        break;
+    case RecordingProfile::Compact:
+        preferences.framesPerSecond = 30;
+        preferences.codec = VideoCodecPreference::Auto;
+        preferences.resolution = VideoResolutionLimit::Height1080;
+        preferences.efficiency = EncoderEfficiencyMode::Efficient;
+        preferences.quality = 0;
+        break;
+    case RecordingProfile::Custom:
+        break;
+    }
+    return ClampRecordingPreferences(std::move(preferences));
+}
+
+int ResolutionHeightLimit(VideoResolutionLimit resolution) noexcept {
+    switch (resolution) {
+    case VideoResolutionLimit::Height1080: return 1080;
+    case VideoResolutionLimit::Height720: return 720;
+    case VideoResolutionLimit::Source: return 0;
+    }
+    return 0;
+}
+
+std::int64_t RecommendedVideoBitRate(const RecordingPreferences& preferences,
+                                     int outputWidth, int outputHeight,
+                                     VideoCodecPreference resolvedCodec) noexcept {
+    if (preferences.useCustomBitRate) {
+        return static_cast<std::int64_t>(std::clamp(preferences.customBitRateMbps, 1, 100)) * 1'000'000;
+    }
+    if (preferences.profile == RecordingProfile::Compatibility) {
+        constexpr std::array<std::int64_t, 3> legacy{6'000'000, 10'000'000, 16'000'000};
+        return legacy[static_cast<std::size_t>(std::clamp(preferences.quality, 0, 2))];
+    }
+
+    const double pixels = static_cast<double>(std::max(outputWidth, 2)) * std::max(outputHeight, 2);
+    const double resolutionScale = std::clamp(pixels / (1920.0 * 1080.0), 0.20, 4.0);
+    const double frameScale = std::clamp(static_cast<double>(preferences.framesPerSecond) / 30.0, 0.5, 2.0);
+    double codecScale = 1.0;
+    if (resolvedCodec == VideoCodecPreference::Hevc) codecScale = 0.72;
+    if (resolvedCodec == VideoCodecPreference::Av1) codecScale = 0.62;
+    const double profileBase = preferences.profile == RecordingProfile::Compact ? 3'500'000.0 : 6'000'000.0;
+    const auto calculated = static_cast<std::int64_t>(profileBase * resolutionScale * frameScale * codecScale);
+    return std::clamp<std::int64_t>(calculated, 1'000'000, 50'000'000);
+}
+
+std::uint64_t EstimatedRecordingBytesPerHour(std::int64_t videoBitRate, bool hasAudio,
+                                             std::int64_t audioBitRate) noexcept {
+    const auto total = std::max<std::int64_t>(0, videoBitRate) +
+                       (hasAudio ? std::max<std::int64_t>(0, audioBitRate) : 0);
+    return static_cast<std::uint64_t>(total) * 3600ULL / 8ULL;
 }
 
 } // namespace opencapture

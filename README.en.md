@@ -4,10 +4,10 @@
 
 OpenCapture is a native screen capture application for Windows 10 and 11. Its goal is a GPU-first recording path that keeps captured frames as D3D11 textures through processing and hardware encoding, avoiding a full-frame CPU memory round trip for every frame.
 
-The project is an actively developed technical prototype. It can capture a window, monitor, or region with Windows Graphics Capture, crop and scale on D3D11, and produce H.264/AAC MKV/MP4 recordings, palette-optimized GIFs, or PNG/clipboard still captures.
+The project is an actively developed technical prototype. It can capture a window, monitor, or region with Windows Graphics Capture, crop and scale on D3D11, and produce H.264, HEVC, or AV1 video with AAC in MKV/MP4, palette-optimized GIFs, or PNG/clipboard still captures.
 
-The latest technical preview is [OpenCapture v0.2.3](https://github.com/CharlieYang0040/OpenCapture/releases/tag/v0.2.3).
-See the [v0.2.3 release notes](docs/releases/v0.2.3.md) for its exact scope and validation boundary.
+The latest technical preview is [OpenCapture v0.2.4](https://github.com/CharlieYang0040/OpenCapture/releases/tag/v0.2.4).
+See the [v0.2.4 release notes](docs/releases/v0.2.4.md) for its exact scope and validation boundary.
 
 ## Goals
 
@@ -31,9 +31,11 @@ Implemented:
 - Persistent named region presets with management actions
 - Windows Graphics Capture frames with QPC timestamps
 - D3D11 shader crop, scale, and BGRA-to-NV12 conversion
-- Real-time H.264 NVENC encoding and MKV output
-- Automatic/manual H.264 selection with an OpenH264 final fallback
-- Recording start/stop controls and active-encoder status
+- H.264, HEVC, and AV1 hardware selection with codec-aware safe fallback
+- GPU-scaled recording at source size, a 1080p maximum, or a 720p maximum
+- Compatibility, Balanced, Compact, and Custom profiles with an hourly size estimate
+- NVENC Realtime, Balanced, and Efficient modes plus a custom target bitrate
+- Recording controls with the active encoder, output size, and target bitrate
 - PNG output, clipboard-only capture, and combined save-and-copy
 - Diskless Windows clipboard transfer through `CF_DIBV5`
 - Event-driven WASAPI loopback/microphone capture foundation and probe
@@ -42,7 +44,7 @@ Implemented:
 - Incomplete-MKV discovery and output collision avoidance
 - UI recovery that validates incomplete MKV streams before choosing a collision-free final name
 - Recording pause/resume with paused time removed from the output timeline
-- H.264/AAC MP4 remux copies that preserve the safe MKV source
+- MP4 remux copies that preserve the safe MKV source
 - GIF recording from the same targets and saved region presets
 - Selectable GIF output at 360p, 480p, 720p, or 1080p; 6-30 fps; and 64-256 colors
 - GPU-scaled low-FPS source recording and FFmpeg two-pass palettegen/paletteuse conversion
@@ -59,7 +61,7 @@ Implemented:
 - Persistent target-border visibility, 1-12 px thickness, and 20-100% opacity controls
 - Configurable capture, video, and GIF global shortcuts with conflict and repeat protection
 - Direct keyboard shortcut capture with clear, restore-default, and restart persistence
-- Persistent video FPS, quality, encoder, audio, and GIF size settings with Restore Default
+- Persistent profile, resolution, FPS, codec, compression, bitrate, audio, and GIF settings
 - Result-oriented tooltips for primary actions and performance/size controls
 - Adaptive UI that follows 100-200% monitor DPI with a persistent 75-200% user adjustment
 - Configurable shortcut output: clipboard, PNG file, or both
@@ -72,12 +74,14 @@ Implemented:
 - Bounded queue with a drop-oldest overload policy
 - Core unit tests and Windows GitHub Actions CI
 
-Not implemented yet:
+Not implemented or still pending hardware validation:
 
 - Audio device selection, per-source volume/mute, Opus, and long-run drift correction
 - General MP4/MKV/WebM offline transcoding with VP9/Opus support
 - Desktop Duplication
 - QSV/AMF hardware validation and long-running performance tests
+- Actual HEVC/AV1 support depends on the GPU generation and driver; OpenCapture verifies the
+  D3D11 encoder when recording starts and Auto falls back to the next compatible codec
 
 See [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md) for the roadmap and performance acceptance criteria.
 
@@ -106,13 +110,13 @@ OpenCapture currently requires no credentials. Do not commit credentials or mach
 
 ## Install a release build
 
-Download `OpenCapture-0.2.3-windows-x64.zip` and `SHA256SUMS.txt` from GitHub Releases,
+Download `OpenCapture-0.2.4-windows-x64.zip` and `SHA256SUMS.txt` from GitHub Releases,
 verify the SHA-256, and extract the entire ZIP into one folder. Keep the DLLs and `licenses`
 directory beside `OpenCapture.exe`. This technical preview is not yet Authenticode-signed and
 may trigger SmartScreen or corporate security controls.
 Corresponding FFmpeg source references, the exact vcpkg port and patches, and the linked build
 configuration are included in the release ZIP and the separate
-`OpenCapture-0.2.3-ffmpeg-build-materials.zip` asset.
+`OpenCapture-0.2.4-ffmpeg-build-materials.zip` asset.
 
 ## Quick start on a new PC
 
@@ -142,7 +146,7 @@ Use these options to build Release or only prepare the tooling:
 After a successful Release build, reproduce the verified distribution ZIP with:
 
 ```powershell
-.\scripts\package_release.ps1 -Version 0.2.3
+.\scripts\package_release.ps1 -Version 0.2.4
 ```
 
 ### Build flow

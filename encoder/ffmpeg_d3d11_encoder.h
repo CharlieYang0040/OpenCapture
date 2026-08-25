@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/recording_options.h"
 #include "gpu/d3d11_frame_processor.h"
 
 #include <d3d11.h>
@@ -16,6 +17,12 @@ struct AVPacket;
 
 namespace opencapture {
 
+struct EncoderOpenOptions {
+    int framesPerSecond{60};
+    std::int64_t bitRate{10'000'000};
+    EncoderEfficiencyMode efficiency{EncoderEfficiencyMode::Realtime};
+};
+
 class FFmpegD3D11Encoder final {
 public:
     using PacketCallback = std::function<bool(AVPacket*)>;
@@ -27,6 +34,8 @@ public:
 
     bool Open(std::string encoderName, ID3D11Device* device, ID3D11Texture2D* prototypeTexture, SIZE frameSize,
               int framesPerSecond, std::int64_t bitRate);
+    bool Open(std::string encoderName, ID3D11Device* device, ID3D11Texture2D* prototypeTexture,
+              SIZE frameSize, const EncoderOpenOptions& options);
     bool Send(const ProcessedFrame& frame, std::int64_t presentationTimestamp);
     bool Flush();
     void SetPacketCallback(PacketCallback callback) { packetCallback_ = std::move(callback); }

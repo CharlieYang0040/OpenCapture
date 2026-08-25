@@ -4,10 +4,10 @@
 
 OpenCapture는 Windows 10/11을 위한 네이티브 화면 캡처 애플리케이션입니다. 화면 캡처부터 색상 변환, 크기 조절, 하드웨어 인코딩까지 가능한 한 GPU 안에서 처리하여 매 프레임 전체 이미지를 CPU 메모리로 복사하지 않는 고성능 녹화 경로를 목표로 합니다.
 
-현재는 활발히 개발 중인 기술 시제품 단계입니다. 창·모니터·영역을 Windows Graphics Capture로 받아 D3D11에서 자르기와 크기 조절을 수행하고, H.264/AAC MKV·MP4, 팔레트 최적화 GIF 또는 PNG·클립보드 캡처로 출력할 수 있습니다.
+현재는 활발히 개발 중인 기술 시제품 단계입니다. 창·모니터·영역을 Windows Graphics Capture로 받아 D3D11에서 자르기와 크기 조절을 수행하고, H.264·HEVC·AV1/AAC MKV·MP4, 팔레트 최적화 GIF 또는 PNG·클립보드 캡처로 출력할 수 있습니다.
 
-최신 기술 프리뷰는 [OpenCapture v0.2.3](https://github.com/CharlieYang0040/OpenCapture/releases/tag/v0.2.3)이며,
-상세 변경 및 검증 범위는 [v0.2.3 릴리스 노트](docs/releases/v0.2.3.md)에 기록합니다.
+최신 기술 프리뷰는 [OpenCapture v0.2.4](https://github.com/CharlieYang0040/OpenCapture/releases/tag/v0.2.4)이며,
+상세 변경 및 검증 범위는 [v0.2.4 릴리스 노트](docs/releases/v0.2.4.md)에 기록합니다.
 
 ## 주요 목표
 
@@ -31,9 +31,11 @@ OpenCapture는 Windows 10/11을 위한 네이티브 화면 캡처 애플리케�
 - 이름이 있는 화면 영역 프리셋 저장·적용·수정·복제·삭제
 - Windows Graphics Capture 프레임 수집과 QPC 타임스탬프
 - D3D11 shader 기반 crop, scale 및 BGRA-to-NV12 변환
-- H.264 NVENC 실시간 인코딩과 MKV 저장
-- H.264 인코더 자동/수동 선택과 OpenH264 최종 폴백
-- 녹화 시작·중지와 실제 활성 인코더 상태 표시
+- H.264·HEVC·AV1 하드웨어 인코더 선택과 코덱별 안전 폴백
+- 원본·최대 1080p·최대 720p GPU 축소 녹화
+- 호환성·균형·용량 절약·사용자 지정 프로필과 시간당 예상 용량
+- NVENC 실시간·균형·고효율 압축 모드 및 사용자 지정 목표 비트레이트
+- 녹화 시작·중지와 실제 활성 인코더·출력 해상도·비트레이트 표시
 - 선택 대상 PNG 저장, 클립보드 전용 복사 및 저장 후 복사
 - 임시 파일 없이 Windows `CF_DIBV5`로 전달하는 클립보드 경로
 - event-driven WASAPI 시스템 loopback·마이크 캡처 기반과 진단 도구
@@ -42,7 +44,7 @@ OpenCapture는 Windows 10/11을 위한 네이티브 화면 캡처 애플리케�
 - 미완료 MKV 검색과 기존 파일 충돌 방지
 - FFmpeg 판독 후 미완료 MKV를 충돌 없는 최종 이름으로 복구하는 UI
 - 결과 타임라인에서 정지 구간을 제거하는 녹화 일시정지·재개
-- 안전 MKV를 보존하면서 만드는 H.264/AAC MP4 무재인코딩 복사본
+- 안전 MKV를 보존하면서 만드는 MP4 무재인코딩 복사본
 - 영역 프리셋과 동일한 대상을 사용하는 GIF 녹화
 - GIF 360p·480p·720p·1080p, 6~30fps 및 64~256색 선택
 - GPU 축소와 저FPS 소스 기록, FFmpeg 2-pass palettegen/paletteuse 변환
@@ -59,7 +61,7 @@ OpenCapture는 Windows 10/11을 위한 네이티브 화면 캡처 애플리케�
 - 대상 테두리 표시 여부, 1~12픽셀 굵기 및 20~100% 불투명도 설정
 - 충돌 감지와 자동 반복 방지를 적용한 사용자 지정 캡처·비디오·GIF 전역 단축키
 - 키보드로 직접 입력하는 단축키 지정, 지우기, 기본값 복원 및 재시작 후 설정 복원
-- 비디오 FPS·품질·인코더·오디오와 GIF 크기 설정의 저장 및 Restore Default
+- 비디오 프로필·해상도·FPS·코덱·압축 모드·비트레이트·오디오와 GIF 크기 설정 저장
 - 주요 버튼과 성능·용량 설정의 결과 중심 툴팁
 - 100~200% 모니터 DPI를 자동 반영하고 75~200% 추가 보정을 저장하는 적응형 UI
 - 단축키 캡처 결과를 클립보드, PNG 또는 둘 다로 선택하는 스크린샷 설정
@@ -72,12 +74,14 @@ OpenCapture는 Windows 10/11을 위한 네이티브 화면 캡처 애플리케�
 - drop-oldest 정책을 사용하는 제한 큐
 - 핵심 모델 단위 테스트와 Windows GitHub Actions CI
 
-아직 구현되지 않음:
+아직 구현되지 않았거나 실기 검증이 남은 항목:
 
 - 오디오 장치 선택, 개별 볼륨·음소거, Opus와 장시간 드리프트 보정
 - VP9/Opus를 포함한 MP4/MKV/WebM 범용 오프라인 재인코딩
 - Desktop Duplication
 - QSV/AMF 실기 검증과 장시간 성능 시험
+- HEVC·AV1의 실제 지원 범위는 GPU 세대와 드라이버에 따라 달라지며, 등록 여부와 별도로
+  녹화 시작 시 D3D11 인코더 열기를 검증하고 자동 모드에서는 다음 호환 코덱으로 폴백
 
 전체 개발 순서와 성능 기준은 [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md)에서 확인할 수 있습니다.
 
@@ -106,12 +110,12 @@ OpenCapture 자체에는 API 키나 계정 정보가 필요하지 않습니다. 
 
 ## 배포본 설치
 
-GitHub Releases에서 `OpenCapture-0.2.3-windows-x64.zip`과 `SHA256SUMS.txt`를 받은 뒤
+GitHub Releases에서 `OpenCapture-0.2.4-windows-x64.zip`과 `SHA256SUMS.txt`를 받은 뒤
 SHA-256을 확인하고 ZIP 전체를 한 폴더에 압축 해제합니다. DLL과 `licenses` 폴더를
 `OpenCapture.exe`와 같은 배포 구조로 유지해야 합니다. 이 기술 프리뷰는 아직
 Authenticode 서명되지 않았으므로 SmartScreen이나 회사 보안 정책이 경고할 수 있습니다.
 FFmpeg 대응 소스 링크, 실제 vcpkg 포트/패치와 빌드 설정은 배포 ZIP과 별도
-`OpenCapture-0.2.3-ffmpeg-build-materials.zip`에 함께 제공합니다.
+`OpenCapture-0.2.4-ffmpeg-build-materials.zip`에 함께 제공합니다.
 
 ## 새 PC에서 빠르게 시작하기
 
@@ -149,7 +153,7 @@ Release 빌드 또는 도구만 준비하려면 다음 옵션을 사용합니다
 검증된 배포 ZIP은 Release 빌드 후 다음 명령으로 재현합니다.
 
 ```powershell
-.\scripts\package_release.ps1 -Version 0.2.3
+.\scripts\package_release.ps1 -Version 0.2.4
 ```
 
 ### 빌드 흐름

@@ -254,6 +254,13 @@ void Win32D3D11App::ApplyRecordingPreferencesFromCommand(const MainPanelCommand&
         command.gifFramesPerSecond,
         command.gifHeight,
         command.gifColors,
+        command.recordingProfile,
+        command.videoCodec,
+        command.videoResolution,
+        command.encoderEfficiency,
+        command.customBitRateMbps,
+        command.allowCodecFallback,
+        command.useCustomBitRate,
     });
     if (next == recordingPreferences_) return;
     const auto previous = recordingPreferences_;
@@ -1417,11 +1424,15 @@ bool Win32D3D11App::StartRecording(int framesPerSecond, int quality, std::string
                                    bool gif, int gifHeight, int gifColors) {
     if (recordingState_.Phase() == SessionPhase::Failed) recordingState_.Reset();
     if (!recordingState_.BeginStart()) return false;
-    const auto candidates = encoderRegistry_.H264Candidates(requestedEncoder);
+    recordingCodec_ = gif ? VideoCodecPreference::H264 : recordingPreferences_.codec;
+    recordingEfficiency_ = gif ? EncoderEfficiencyMode::Realtime : recordingPreferences_.efficiency;
+    recordingAllowCodecFallback_ = gif || recordingPreferences_.allowCodecFallback;
+    const auto candidates = encoderRegistry_.Candidates(recordingCodec_, requestedEncoder,
+                                                         recordingAllowCodecFallback_);
     if (!targetPicker_.Selected().IsValid() || candidates.empty()) {
         FailRecording(requestedEncoder.empty()
-                          ? "Select a valid capture target and ensure an H.264 encoder is available."
-                          : "The requested H.264 encoder is not available on the active adapter.");
+                          ? "Select a valid capture target and ensure the requested video codec is available."
+                          : "The requested video encoder is not available on the active adapter.");
         return false;
     }
     static constexpr std::array<std::int64_t, 3> bitRates{6'000'000, 10'000'000, 16'000'000};
@@ -1432,7 +1443,8 @@ bool Win32D3D11App::StartRecording(int framesPerSecond, int quality, std::string
         return false;
     }
     recordingGif_ = gif;
-    recordingMaximumHeight_ = gif ? std::clamp(gifHeight, 360, 1080) : 0;
+    recordingMaximumHeight_ = gif ? std::clamp(gifHeight, 360, 1080)
+                                  : ResolutionHeightLimit(recordingPreferences_.resolution);
     gifColors_ = std::clamp(gifColors, 32, 256);
     gifDurationLimit_ = 30.0;
     gifOutputPath_.clear();
@@ -1462,6 +1474,7 @@ bool Win32D3D11App::StartRecording(int framesPerSecond, int quality, std::string
     }
     recordingFramesPerSecond_ = std::clamp(framesPerSecond, 1, 120);
     recordingFrameCount_ = 0;
+    recordingOutputSize_ = {};
     recordingSourceFrameCount_ = 0;
     recordingSkippedFrameTicks_ = 0;
     recordingPreviousSourceQpc_ = 0;
@@ -1623,17 +1636,24 @@ bool Win32D3D11App::ProcessRecordingFrame(CapturedFrame frame) {
     }
     if (recordingState_.Phase() == SessionPhase::Starting) {
         std::ostringstream failures;
-        for (const auto* candidate : encoderRegistry_.H264Candidates(requestedEncoderName_)) {
+        for (const auto* candidate : encoderRegistry_.Candidates(
+                 recordingCodec_, requestedEncoderName_, recordingAllowCodecFallback_)) {
+            const auto resolvedCodec = ToCodecPreference(candidate->codec);
+            recordingBitRate_ = recordingGif_ ? recordingBitRate_ : RecommendedVideoBitRate(
+                recordingPreferences_, processed->contentSize.cx, processed->contentSize.cy, resolvedCodec);
+            const EncoderOpenOptions encoderOptions{
+                recordingFramesPerSecond_, recordingBitRate_, recordingEfficiency_};
             if (videoEncoder_.Open(candidate->name, device_.Get(), processed->texture.Get(),
-                                   processed->contentSize, recordingFramesPerSecond_, recordingBitRate_)) {
+                                   processed->contentSize, encoderOptions)) {
                 activeEncoderName_ = candidate->displayName;
+                recordingOutputSize_ = processed->contentSize;
                 break;
             }
             if (failures.tellp() > 0) failures << " | ";
             failures << candidate->name << ": " << videoEncoder_.LastError();
         }
         if (!videoEncoder_.IsOpen()) {
-            FailRecording("No H.264 encoder accepted the D3D11 frame path. " + failures.str());
+            FailRecording("No compatible video encoder accepted the D3D11 frame path. " + failures.str());
             return false;
         }
         if ((systemAudioEnabled_ || microphoneEnabled_) && !audioEncoder_.Open()) {
@@ -1806,7 +1826,10 @@ bool Win32D3D11App::RunNvencSmoke(const ProcessedFrame& frame) {
 bool Win32D3D11App::RunEncoderFallbackSmoke() {
     const auto requested = ReadEnvironmentUtf8(L"OPENCAPTURE_VIDEO_ENCODER");
     const auto outputPath = ReadEnvironmentUtf8(L"OPENCAPTURE_RECORD_OUTPUT");
-    const auto candidates = encoderRegistry_.H264Candidates(requested);
+    const bool allowFallback = ReadEnvironmentInt(L"OPENCAPTURE_ALLOW_CODEC_FALLBACK", 0) != 0;
+    const auto candidates = encoderRegistry_.Candidates(
+        VideoCodecPreference::Auto, requested == "auto" ? std::string_view{} : requested,
+        requested == "auto" || allowFallback);
     if (requested.empty() || outputPath.empty() || candidates.empty()) {
         frameProcessingError_ = "Encoder fallback smoke requires an available OPENCAPTURE_VIDEO_ENCODER and OPENCAPTURE_RECORD_OUTPUT.";
         return false;
@@ -1828,9 +1851,19 @@ bool Win32D3D11App::RunEncoderFallbackSmoke() {
         frameProcessingError_ = "Could not create the synthetic NV12 encoder smoke texture.";
         return false;
     }
-    if (!videoEncoder_.Open(candidates.front()->name, device_.Get(), frame.texture.Get(), frame.contentSize,
-                            60, 2'000'000)) {
-        frameProcessingError_ = videoEncoder_.LastError();
+    const auto efficiency = static_cast<EncoderEfficiencyMode>(
+        std::clamp(ReadEnvironmentInt(L"OPENCAPTURE_ENCODER_EFFICIENCY", 0), 0, 2));
+    std::ostringstream failures;
+    for (const auto* candidate : candidates) {
+        if (videoEncoder_.Open(candidate->name, device_.Get(), frame.texture.Get(), frame.contentSize,
+                               EncoderOpenOptions{60, 2'000'000, efficiency})) {
+            break;
+        }
+        if (failures.tellp() > 0) failures << " | ";
+        failures << candidate->name << ": " << videoEncoder_.LastError();
+    }
+    if (!videoEncoder_.IsOpen()) {
+        frameProcessingError_ = "No smoke-test encoder opened. " + failures.str();
         return false;
     }
     if (avMuxSmokeMode_ && !audioEncoder_.Open()) {
@@ -2065,12 +2098,12 @@ void Win32D3D11App::Render() {
         mediaProgress_.load(), recordingPath_, recordingError,
         activeEncoderName_, recordingFrameCount_, recordingSourceFrameCount_,
         recordingSkippedFrameTicks_, capture_.DroppedFrameCount(), muxer_.MaxQueuedPacketCount(),
-        recordingMaximumSourceGapMilliseconds_, recordingElapsedSeconds_};
+        recordingMaximumSourceGapMilliseconds_, recordingElapsedSeconds_,
+        recordingOutputSize_.cx, recordingOutputSize_.cy, recordingBitRate_};
     std::vector<EncoderUiChoice> encoderChoices;
     for (const auto& capability : encoderRegistry_.Capabilities()) {
-        if (capability.codec == VideoCodecFamily::H264) {
-            encoderChoices.push_back({capability.name, capability.displayName, capability.usable, capability.detail});
-        }
+        encoderChoices.push_back({capability.name, capability.displayName, capability.usable,
+                                  capability.detail, ToCodecPreference(capability.codec)});
     }
     HotkeyUiState hotkeyUi{};
     const auto& hotkeyBindings = globalHotkeys_.Bindings();

@@ -35,6 +35,9 @@ struct RecordingUiState {
     std::size_t muxQueuePeak{};
     double maximumSourceGapMilliseconds{};
     double elapsedSeconds{};
+    int outputWidth{};
+    int outputHeight{};
+    std::int64_t videoBitRate{};
 };
 
 struct EncoderUiChoice {
@@ -42,6 +45,7 @@ struct EncoderUiChoice {
     std::string_view displayName;
     bool usable{};
     std::string_view detail;
+    VideoCodecPreference codec{VideoCodecPreference::H264};
 };
 
 struct RecoverableRecordingUiItem {
@@ -128,6 +132,13 @@ struct MainPanelCommand {
     bool closeToTray{};
     int framesPerSecond{60};
     int quality{1};
+    RecordingProfile recordingProfile{RecordingProfile::Compatibility};
+    VideoCodecPreference videoCodec{VideoCodecPreference::H264};
+    VideoResolutionLimit videoResolution{VideoResolutionLimit::Source};
+    EncoderEfficiencyMode encoderEfficiency{EncoderEfficiencyMode::Realtime};
+    int customBitRateMbps{10};
+    bool allowCodecFallback{};
+    bool useCustomBitRate{};
     int gifFramesPerSecond{12};
     int gifHeight{720};
     int gifColors{256};
