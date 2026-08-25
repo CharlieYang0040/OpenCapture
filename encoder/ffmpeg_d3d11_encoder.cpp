@@ -11,6 +11,7 @@ extern "C" {
 
 #include <array>
 #include <cstring>
+#include <limits>
 #include <string_view>
 #include <utility>
 
@@ -32,7 +33,16 @@ FFmpegD3D11Encoder::~FFmpegD3D11Encoder() { Close(); }
 bool FFmpegD3D11Encoder::Open(std::string encoderName, ID3D11Device* device,
                               ID3D11Texture2D* prototypeTexture, SIZE frameSize,
                               int framesPerSecond, std::int64_t bitRate) {
+    return Open(std::move(encoderName), device, prototypeTexture, frameSize,
+                EncoderOpenOptions{framesPerSecond, bitRate, EncoderEfficiencyMode::Realtime});
+}
+
+bool FFmpegD3D11Encoder::Open(std::string encoderName, ID3D11Device* device,
+                              ID3D11Texture2D* prototypeTexture, SIZE frameSize,
+                              const EncoderOpenOptions& options) {
     Close();
+    const int framesPerSecond = options.framesPerSecond;
+    const std::int64_t bitRate = options.bitRate;
     if (!device || !prototypeTexture || frameSize.cx <= 0 || frameSize.cy <= 0 || framesPerSecond <= 0) {
         lastError_ = "Invalid D3D11 encoder configuration.";
         return false;
@@ -111,16 +121,34 @@ bool FFmpegD3D11Encoder::Open(std::string encoderName, ID3D11Device* device,
     codecContext_->pix_fmt = softwareInput_ ? AV_PIX_FMT_YUV420P : AV_PIX_FMT_D3D11;
     codecContext_->bit_rate = bitRate;
     codecContext_->gop_size = framesPerSecond * 2;
-    codecContext_->max_b_frames = 0;
-    codecContext_->flags |= AV_CODEC_FLAG_LOW_DELAY | AV_CODEC_FLAG_GLOBAL_HEADER;
+    codecContext_->max_b_frames = options.efficiency == EncoderEfficiencyMode::Realtime ? 0 :
+                                 options.efficiency == EncoderEfficiencyMode::Balanced ? 2 : 3;
+    codecContext_->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+    if (options.efficiency == EncoderEfficiencyMode::Realtime) {
+        codecContext_->flags |= AV_CODEC_FLAG_LOW_DELAY;
+    } else {
+        codecContext_->rc_max_rate = bitRate + bitRate / 2;
+        codecContext_->rc_buffer_size = static_cast<int>(std::min<std::int64_t>(
+            codecContext_->rc_max_rate * 2, std::numeric_limits<int>::max()));
+    }
     codecContext_->color_range = AVCOL_RANGE_MPEG;
     codecContext_->colorspace = AVCOL_SPC_BT709;
     codecContext_->color_primaries = AVCOL_PRI_BT709;
     codecContext_->color_trc = AVCOL_TRC_BT709;
     if (!softwareInput_) codecContext_->hw_frames_ctx = av_buffer_ref(framesContext_);
     if (encoderName.find("nvenc") != std::string::npos) {
-        av_opt_set(codecContext_->priv_data, "preset", "p1", 0);
-        av_opt_set(codecContext_->priv_data, "tune", "ull", 0);
+        const bool realtime = options.efficiency == EncoderEfficiencyMode::Realtime;
+        const bool efficient = options.efficiency == EncoderEfficiencyMode::Efficient;
+        av_opt_set(codecContext_->priv_data, "preset", realtime ? "p1" : efficient ? "p5" : "p4", 0);
+        av_opt_set(codecContext_->priv_data, "tune", realtime ? "ull" : "hq", 0);
+        if (!realtime) {
+            av_opt_set(codecContext_->priv_data, "rc", "vbr", 0);
+            av_opt_set(codecContext_->priv_data, "spatial-aq", "1", 0);
+            if (efficient) {
+                av_opt_set(codecContext_->priv_data, "temporal-aq", "1", 0);
+                av_opt_set(codecContext_->priv_data, "rc-lookahead", "20", 0);
+            }
+        }
     }
     result = avcodec_open2(codecContext_, codec, nullptr);
     if (result < 0) {

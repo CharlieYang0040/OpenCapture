@@ -111,6 +111,13 @@ struct MainPanelState {
     int format{};
     int fps{60};
     int quality{1};
+    int recordingProfile{static_cast<int>(RecordingProfile::Compatibility)};
+    int videoCodec{static_cast<int>(VideoCodecPreference::H264)};
+    int videoResolution{static_cast<int>(VideoResolutionLimit::Source)};
+    int encoderEfficiency{static_cast<int>(EncoderEfficiencyMode::Realtime)};
+    int customBitRateMbps{10};
+    bool allowCodecFallback{};
+    bool useCustomBitRate{};
     bool systemAudio{true};
     bool microphone{};
     bool recordingSettingsInitialized{};
@@ -137,6 +144,13 @@ void ApplyRecordingPreferences(MainPanelState& panel, const RecordingPreferences
         panel.format = preferences.remuxToMp4 ? 1 : 0;
         panel.systemAudio = preferences.systemAudio;
         panel.microphone = preferences.microphone;
+        panel.recordingProfile = static_cast<int>(preferences.profile);
+        panel.videoCodec = static_cast<int>(preferences.codec);
+        panel.videoResolution = static_cast<int>(preferences.resolution);
+        panel.encoderEfficiency = static_cast<int>(preferences.efficiency);
+        panel.customBitRateMbps = preferences.customBitRateMbps;
+        panel.allowCodecFallback = preferences.allowCodecFallback;
+        panel.useCustomBitRate = preferences.useCustomBitRate;
         panel.encoderSelectionPending = true;
     }
     if (includeGif) {
@@ -174,6 +188,12 @@ int EncoderSelectionIndex(const std::vector<EncoderUiChoice>& encoderChoices,
         if (encoderChoices[index].name == encoderName) return static_cast<int>(index + 1);
     }
     return 0;
+}
+
+bool EncoderChoiceVisible(const EncoderUiChoice& choice, int activeTab, int codec) {
+    if (activeTab == 2) return choice.codec == VideoCodecPreference::H264;
+    return codec == static_cast<int>(VideoCodecPreference::Auto) ||
+           choice.codec == static_cast<VideoCodecPreference>(codec);
 }
 
 } // namespace
@@ -292,7 +312,7 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     if (panel.selectedEncoder > static_cast<int>(encoderChoices.size())) panel.selectedEncoder = 0;
     const char* encoderPreview = "Auto (recommended)";
     if (panel.selectedEncoder > 0) encoderPreview = encoderChoices[static_cast<std::size_t>(panel.selectedEncoder - 1)].displayName.data();
-    if (panel.activeTab == 1 || panel.activeTab == 2) {
+    if (panel.activeTab == 2) {
     ImGui::TextUnformatted("Video encoder");
     ExplainLastItem("Auto selects the best available hardware encoder. A manual choice is useful for compatibility testing.");
     ImGui::SameLine();
@@ -303,6 +323,7 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
         }
         for (std::size_t index = 0; index < encoderChoices.size(); ++index) {
             const auto& choice = encoderChoices[index];
+            if (!EncoderChoiceVisible(choice, panel.activeTab, panel.videoCodec)) continue;
             if (!choice.usable) ImGui::BeginDisabled();
             const bool selected = panel.selectedEncoder == static_cast<int>(index + 1);
             if (ImGui::Selectable(choice.displayName.data(), selected) && choice.usable) {
@@ -543,9 +564,56 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     }
     }
 
-    constexpr std::array formats{"MKV / H.264", "MP4 copy / H.264"};
+    constexpr std::array formats{"MKV (recommended)", "MP4 copy after recording"};
     constexpr std::array qualities{"Performance", "Balanced", "Quality"};
     if (panel.activeTab == 1) {
+    constexpr std::array profiles{"Compatibility", "Balanced", "Compact", "Custom"};
+    constexpr std::array resolutions{"Source resolution", "Maximum 1080p", "Maximum 720p"};
+    constexpr std::array codecs{"Auto (AV1 > HEVC > H.264)", "H.264", "HEVC", "AV1"};
+    constexpr std::array efficiencies{"Realtime", "Balanced", "Efficient"};
+
+    ImGui::SeparatorText("Recording profile");
+    if (ImGui::Combo("Profile", &panel.recordingProfile, profiles.data(), static_cast<int>(profiles.size()))) {
+        RecordingPreferences selected{};
+        selected.framesPerSecond = panel.fps;
+        selected.quality = panel.quality;
+        selected.codec = static_cast<VideoCodecPreference>(panel.videoCodec);
+        selected.resolution = static_cast<VideoResolutionLimit>(panel.videoResolution);
+        selected.efficiency = static_cast<EncoderEfficiencyMode>(panel.encoderEfficiency);
+        selected.customBitRateMbps = panel.customBitRateMbps;
+        selected = ApplyRecordingProfile(selected, static_cast<RecordingProfile>(panel.recordingProfile));
+        panel.quality = selected.quality;
+        panel.videoCodec = static_cast<int>(selected.codec);
+        panel.videoResolution = static_cast<int>(selected.resolution);
+        panel.encoderEfficiency = static_cast<int>(selected.efficiency);
+        panel.useCustomBitRate = selected.useCustomBitRate;
+        panel.selectedEncoder = 0;
+        command.applyRecordingSettings = true;
+    }
+    ExplainLastItem("Compatibility preserves the previous H.264 path. Compact prioritizes smaller files and modern codecs.");
+    if (ImGui::Combo("Resolution", &panel.videoResolution, resolutions.data(), static_cast<int>(resolutions.size()))) {
+        panel.recordingProfile = static_cast<int>(RecordingProfile::Custom);
+        panel.useCustomBitRate = false;
+        command.applyRecordingSettings = true;
+    }
+    if (ImGui::Combo("Codec", &panel.videoCodec, codecs.data(), static_cast<int>(codecs.size()))) {
+        panel.recordingProfile = static_cast<int>(RecordingProfile::Custom);
+        panel.useCustomBitRate = false;
+        panel.selectedEncoder = 0;
+        command.applyRecordingSettings = true;
+    }
+    ExplainLastItem("Auto tries AV1, then HEVC, then H.264. Explicit codecs can fall back only when enabled below.");
+    bool selectedCodecAvailable = panel.videoCodec == static_cast<int>(VideoCodecPreference::Auto);
+    for (const auto& choice : encoderChoices) {
+        if (choice.usable && choice.codec == static_cast<VideoCodecPreference>(panel.videoCodec)) {
+            selectedCodecAvailable = true;
+            break;
+        }
+    }
+    if (!selectedCodecAvailable) {
+        ImGui::TextColored(ImVec4(1.0F, 0.45F, 0.35F, 1.0F),
+                           "This codec is not available on the active GPU. Enable fallback or choose another codec.");
+    }
     if (ImGui::Combo("Format", &panel.format, formats.data(), static_cast<int>(formats.size()))) {
         command.applyRecordingSettings = true;
     }
@@ -553,13 +621,79 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     ImGui::SliderInt("FPS", &panel.fps, 15, 120);
     if (ImGui::IsItemDeactivatedAfterEdit()) command.applyRecordingSettings = true;
     ExplainLastItem("Higher FPS makes motion smoother but increases encoder load and file size.");
-    if (ImGui::Combo("Quality", &panel.quality, qualities.data(), static_cast<int>(qualities.size()))) {
-        command.applyRecordingSettings = true;
+    if (panel.recordingProfile == static_cast<int>(RecordingProfile::Compatibility)) {
+        if (ImGui::Combo("Legacy quality", &panel.quality, qualities.data(), static_cast<int>(qualities.size()))) {
+            command.applyRecordingSettings = true;
+        }
+        ExplainLastItem("Preserves the previous 6, 10, and 16 Mbps H.264 choices.");
     }
-    ExplainLastItem("Performance reduces recording overhead; Quality uses a higher bitrate and creates larger files.");
     command.framesPerSecond = panel.fps;
     command.quality = panel.quality;
     command.remuxToMp4 = panel.format == 1;
+
+    if (ImGui::CollapsingHeader("Advanced encoding")) {
+        ImGui::TextUnformatted("Encoder backend");
+        ImGui::SameLine();
+        if (ImGui::BeginCombo("##VideoEncoderAdvanced", encoderPreview)) {
+            if (ImGui::Selectable("Auto (recommended)", panel.selectedEncoder == 0)) {
+                panel.selectedEncoder = 0;
+                command.applyRecordingSettings = true;
+            }
+            for (std::size_t index = 0; index < encoderChoices.size(); ++index) {
+                const auto& choice = encoderChoices[index];
+                if (!EncoderChoiceVisible(choice, 1, panel.videoCodec)) continue;
+                if (!choice.usable) ImGui::BeginDisabled();
+                const bool selected = panel.selectedEncoder == static_cast<int>(index + 1);
+                if (ImGui::Selectable(choice.displayName.data(), selected) && choice.usable) {
+                    panel.selectedEncoder = static_cast<int>(index + 1);
+                    command.applyRecordingSettings = true;
+                }
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && !choice.detail.empty()) {
+                    ImGui::SetTooltip("%.*s", static_cast<int>(choice.detail.size()), choice.detail.data());
+                }
+                if (!choice.usable) ImGui::EndDisabled();
+            }
+            ImGui::EndCombo();
+        }
+        if (ImGui::Combo("Compression mode", &panel.encoderEfficiency, efficiencies.data(),
+                         static_cast<int>(efficiencies.size()))) {
+            panel.recordingProfile = static_cast<int>(RecordingProfile::Custom);
+            panel.useCustomBitRate = false;
+            command.applyRecordingSettings = true;
+        }
+        if (ImGui::Checkbox("Use a custom target bitrate", &panel.useCustomBitRate)) {
+            panel.recordingProfile = static_cast<int>(RecordingProfile::Custom);
+            command.applyRecordingSettings = true;
+        }
+        if (panel.useCustomBitRate) {
+            ImGui::SliderInt("Target bitrate", &panel.customBitRateMbps, 1, 100, "%d Mbps");
+            if (ImGui::IsItemDeactivatedAfterEdit()) command.applyRecordingSettings = true;
+        }
+        if (ImGui::Checkbox("Allow fallback to a compatible codec", &panel.allowCodecFallback)) {
+            command.applyRecordingSettings = true;
+        }
+    }
+
+    const int estimateHeight = panel.videoResolution == static_cast<int>(VideoResolutionLimit::Height720) ? 720 : 1080;
+    const int estimateWidth = estimateHeight == 720 ? 1280 : 1920;
+    RecordingPreferences estimate{};
+    estimate.framesPerSecond = panel.fps;
+    estimate.quality = panel.quality;
+    estimate.profile = static_cast<RecordingProfile>(panel.recordingProfile);
+    estimate.codec = static_cast<VideoCodecPreference>(panel.videoCodec);
+    estimate.customBitRateMbps = panel.customBitRateMbps;
+    estimate.useCustomBitRate = panel.useCustomBitRate;
+    const auto estimateCodec = estimate.codec == VideoCodecPreference::Auto ? VideoCodecPreference::Hevc : estimate.codec;
+    const auto estimateRate = RecommendedVideoBitRate(estimate, estimateWidth, estimateHeight, estimateCodec);
+    const auto estimateBytes = EstimatedRecordingBytesPerHour(estimateRate, panel.systemAudio || panel.microphone);
+    ImGui::Text("Estimate: %.1f Mbps | %.2f GB/hour at %dp",
+                static_cast<double>(estimateRate) / 1'000'000.0,
+                static_cast<double>(estimateBytes) / 1'000'000'000.0, estimateHeight);
+    ImGui::TextDisabled("Actual size varies with screen content and the selected encoder.");
+    if (panel.format == 1) {
+        ImGui::TextColored(ImVec4(1.0F, 0.75F, 0.25F, 1.0F),
+                           "MP4 copy does not reduce size and keeps the source MKV.");
+    }
 
     if (ImGui::Checkbox("System audio", &panel.systemAudio)) command.applyRecordingSettings = true;
     ExplainLastItem("Include sound played by Windows applications in video recordings. GIF never includes audio.");
@@ -576,6 +710,13 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
         true);
     command.systemAudio = panel.systemAudio;
     command.microphone = panel.microphone;
+    command.recordingProfile = static_cast<RecordingProfile>(panel.recordingProfile);
+    command.videoCodec = static_cast<VideoCodecPreference>(panel.videoCodec);
+    command.videoResolution = static_cast<VideoResolutionLimit>(panel.videoResolution);
+    command.encoderEfficiency = static_cast<EncoderEfficiencyMode>(panel.encoderEfficiency);
+    command.customBitRateMbps = panel.customBitRateMbps;
+    command.allowCodecFallback = panel.allowCodecFallback;
+    command.useCustomBitRate = panel.useCustomBitRate;
     if (ImGui::SmallButton("Restore Default")) {
         ApplyRecordingPreferences(panel, DefaultRecordingPreferences(), true, false);
         panel.selectedEncoder = 0;
@@ -593,6 +734,13 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     command.remuxToMp4 = panel.format == 1;
     command.systemAudio = panel.systemAudio;
     command.microphone = panel.microphone;
+    command.recordingProfile = static_cast<RecordingProfile>(panel.recordingProfile);
+    command.videoCodec = static_cast<VideoCodecPreference>(panel.videoCodec);
+    command.videoResolution = static_cast<VideoResolutionLimit>(panel.videoResolution);
+    command.encoderEfficiency = static_cast<EncoderEfficiencyMode>(panel.encoderEfficiency);
+    command.customBitRateMbps = panel.customBitRateMbps;
+    command.allowCodecFallback = panel.allowCodecFallback;
+    command.useCustomBitRate = panel.useCustomBitRate;
     command.encoderName = SelectedEncoderName(panel, encoderChoices);
     command.gifFramesPerSecond = kGifFpsChoices[static_cast<std::size_t>(
         std::clamp(panel.gifFpsIndex, 0, static_cast<int>(kGifFpsChoices.size()) - 1))];
@@ -811,6 +959,10 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
         ImGui::TextWrapped("Output: %.*s", static_cast<int>(recording.outputPath.size()), recording.outputPath.data());
         if (!recording.encoderName.empty()) {
             ImGui::Text("Active encoder: %.*s", static_cast<int>(recording.encoderName.size()), recording.encoderName.data());
+        }
+        if (recording.outputWidth > 0 && recording.outputHeight > 0) {
+            ImGui::Text("Output: %dx%d | %.1f Mbps", recording.outputWidth, recording.outputHeight,
+                        static_cast<double>(recording.videoBitRate) / 1'000'000.0);
         }
     }
     if (!recording.active && !mediaBusy && recording.canRemux) {
