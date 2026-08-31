@@ -94,13 +94,13 @@ RecordingPreferences ClampRecordingPreferences(RecordingPreferences preferences)
         preferences.gifHeight, kGifHeightChoices.data(), kGifHeightChoices.size());
     preferences.gifColors = SnapToAllowedChoice(
         preferences.gifColors, kGifColorChoices.data(), kGifColorChoices.size());
-    preferences.profile = ClampEnum(static_cast<int>(preferences.profile), 3,
+    preferences.profile = ClampEnum(static_cast<int>(preferences.profile), 4,
                                     RecordingProfile::Compatibility);
     preferences.codec = ClampEnum(static_cast<int>(preferences.codec), 3,
                                   VideoCodecPreference::H264);
     preferences.resolution = ClampEnum(static_cast<int>(preferences.resolution), 2,
                                        VideoResolutionLimit::Source);
-    preferences.efficiency = ClampEnum(static_cast<int>(preferences.efficiency), 2,
+    preferences.efficiency = ClampEnum(static_cast<int>(preferences.efficiency), 3,
                                        EncoderEfficiencyMode::Realtime);
     preferences.customBitRateMbps = std::clamp(preferences.customBitRateMbps, 1, 100);
     preferences.encoderName.erase(
@@ -165,7 +165,8 @@ RecordingPreferences ParseRecordingPreferences(std::string_view text,
 std::string SerializeRecordingPreferences(const RecordingPreferences& preferences) {
     const auto clamped = ClampRecordingPreferences(preferences);
     std::ostringstream output;
-    output << "fps=" << clamped.framesPerSecond << '\n'
+    output << "profile_schema=2\n"
+           << "fps=" << clamped.framesPerSecond << '\n'
            << "quality=" << clamped.quality << '\n'
            << "remux_to_mp4=" << (clamped.remuxToMp4 ? 1 : 0) << '\n'
            << "system_audio=" << (clamped.systemAudio ? 1 : 0) << '\n'
@@ -187,26 +188,39 @@ std::string SerializeRecordingPreferences(const RecordingPreferences& preference
 RecordingPreferences ApplyRecordingProfile(RecordingPreferences preferences,
                                             RecordingProfile profile) noexcept {
     preferences.profile = profile;
-    preferences.useCustomBitRate = profile == RecordingProfile::Custom;
+    if (profile != RecordingProfile::Custom) preferences.useCustomBitRate = false;
     switch (profile) {
     case RecordingProfile::Compatibility:
+        preferences.framesPerSecond = 60;
         preferences.codec = VideoCodecPreference::H264;
-        preferences.resolution = VideoResolutionLimit::Source;
+        preferences.resolution = VideoResolutionLimit::Height1080;
         preferences.efficiency = EncoderEfficiencyMode::Realtime;
         preferences.quality = 1;
+        preferences.allowCodecFallback = true;
         break;
     case RecordingProfile::Balanced:
-        preferences.codec = VideoCodecPreference::H264;
+        preferences.framesPerSecond = 60;
+        preferences.codec = VideoCodecPreference::Hevc;
         preferences.resolution = VideoResolutionLimit::Height1080;
         preferences.efficiency = EncoderEfficiencyMode::Balanced;
         preferences.quality = 1;
+        preferences.allowCodecFallback = true;
         break;
     case RecordingProfile::Compact:
         preferences.framesPerSecond = 30;
-        preferences.codec = VideoCodecPreference::Auto;
+        preferences.codec = VideoCodecPreference::Hevc;
         preferences.resolution = VideoResolutionLimit::Height1080;
-        preferences.efficiency = EncoderEfficiencyMode::Efficient;
+        preferences.efficiency = EncoderEfficiencyMode::Balanced;
         preferences.quality = 0;
+        preferences.allowCodecFallback = true;
+        break;
+    case RecordingProfile::Quality:
+        preferences.framesPerSecond = 60;
+        preferences.codec = VideoCodecPreference::Hevc;
+        preferences.resolution = VideoResolutionLimit::Source;
+        preferences.efficiency = EncoderEfficiencyMode::Quality;
+        preferences.quality = 2;
+        preferences.allowCodecFallback = true;
         break;
     case RecordingProfile::Custom:
         break;
@@ -240,7 +254,9 @@ std::int64_t RecommendedVideoBitRate(const RecordingPreferences& preferences,
     double codecScale = 1.0;
     if (resolvedCodec == VideoCodecPreference::Hevc) codecScale = 0.72;
     if (resolvedCodec == VideoCodecPreference::Av1) codecScale = 0.62;
-    const double profileBase = preferences.profile == RecordingProfile::Compact ? 3'500'000.0 : 6'000'000.0;
+    double profileBase = 6'000'000.0;
+    if (preferences.profile == RecordingProfile::Compact) profileBase = 3'500'000.0;
+    if (preferences.profile == RecordingProfile::Quality) profileBase = 10'000'000.0;
     const auto calculated = static_cast<std::int64_t>(profileBase * resolutionScale * frameScale * codecScale);
     return std::clamp<std::int64_t>(calculated, 1'000'000, 50'000'000);
 }
@@ -250,6 +266,32 @@ std::uint64_t EstimatedRecordingBytesPerHour(std::int64_t videoBitRate, bool has
     const auto total = std::max<std::int64_t>(0, videoBitRate) +
                        (hasAudio ? std::max<std::int64_t>(0, audioBitRate) : 0);
     return static_cast<std::uint64_t>(total) * 3600ULL / 8ULL;
+}
+
+RecordingGpuPressure PredictRecordingGpuPressure(
+    const RecordingPreferences& preferences, int estimatedOutputHeight) noexcept {
+    int score{};
+    switch (preferences.efficiency) {
+    case EncoderEfficiencyMode::Realtime: break;
+    case EncoderEfficiencyMode::Balanced: score += 1; break;
+    case EncoderEfficiencyMode::Efficient: score += 2; break;
+    case EncoderEfficiencyMode::Quality: score += 3; break;
+    }
+    if (preferences.framesPerSecond > 90) score += 2;
+    else if (preferences.framesPerSecond > 60) score += 1;
+    if (estimatedOutputHeight > 2160) score += 2;
+    else if (estimatedOutputHeight > 1080) score += 1;
+    if (preferences.codec == VideoCodecPreference::Hevc ||
+        preferences.codec == VideoCodecPreference::Av1 ||
+        preferences.codec == VideoCodecPreference::Auto) {
+        score += 1;
+    }
+    if (preferences.profile == RecordingProfile::Quality) score += 1;
+
+    if (score == 0) return RecordingGpuPressure::Low;
+    if (score <= 2) return RecordingGpuPressure::Moderate;
+    if (score <= 4) return RecordingGpuPressure::High;
+    return RecordingGpuPressure::VeryHigh;
 }
 
 } // namespace opencapture

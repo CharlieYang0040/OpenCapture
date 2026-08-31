@@ -32,8 +32,12 @@ struct RecordingUiState {
     std::uint64_t sourceFrameCount{};
     std::uint64_t skippedFrameTicks{};
     std::uint64_t captureDroppedFrameCount{};
+    std::uint64_t processingDroppedFrameCount{};
+    std::uint64_t encoderDroppedFrameCount{};
+    std::size_t encoderQueuePeak{};
     std::size_t muxQueuePeak{};
     double maximumSourceGapMilliseconds{};
+    double maximumEncodeSubmissionMilliseconds{};
     double elapsedSeconds{};
     int outputWidth{};
     int outputHeight{};
@@ -134,10 +138,10 @@ struct MainPanelCommand {
     int quality{1};
     RecordingProfile recordingProfile{RecordingProfile::Compatibility};
     VideoCodecPreference videoCodec{VideoCodecPreference::H264};
-    VideoResolutionLimit videoResolution{VideoResolutionLimit::Source};
+    VideoResolutionLimit videoResolution{VideoResolutionLimit::Height1080};
     EncoderEfficiencyMode encoderEfficiency{EncoderEfficiencyMode::Realtime};
     int customBitRateMbps{10};
-    bool allowCodecFallback{};
+    bool allowCodecFallback{true};
     bool useCustomBitRate{};
     int gifFramesPerSecond{12};
     int gifHeight{720};

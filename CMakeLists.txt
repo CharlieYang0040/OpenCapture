@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(OpenCapture VERSION 0.2.4 LANGUAGES CXX)
+project(OpenCapture VERSION 0.2.5 LANGUAGES CXX)
 
 if(NOT WIN32)
     message(FATAL_ERROR "OpenCapture is a Windows-only application")
@@ -64,6 +64,7 @@ if(OPENCAPTURE_BUILD_APP)
         encoder/ffmpeg_d3d11_encoder.cpp
         encoder/ffmpeg_encoder_registry.cpp
         encoder/ffmpeg_muxer.cpp
+        encoder/video_encoder_worker.cpp
         encoder/ffmpeg_gif_converter.cpp
         gpu/d3d11_frame_processor.cpp
         image/screenshot_service.cpp

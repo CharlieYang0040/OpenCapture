@@ -113,6 +113,30 @@ void FFmpegEncoderRegistry::Probe(std::uint32_t d3dAdapterVendorId) {
     }
 }
 
+void FFmpegEncoderRegistry::RecordD3D11OpenResult(
+    std::string_view encoderName, bool opened, std::string detail) {
+    for (auto& capability : capabilities_) {
+        if (capability.name != encoderName) continue;
+        capability.usable = capability.usable && opened;
+        capability.detail = opened
+            ? "actual D3D11 encoder open verified"
+            : "actual D3D11 encoder open failed: " + std::move(detail);
+        break;
+    }
+    RefreshSelectedH264();
+}
+
+void FFmpegEncoderRegistry::RefreshSelectedH264() noexcept {
+    selectedH264Index_ = static_cast<std::size_t>(-1);
+    for (std::size_t index = 0; index < capabilities_.size(); ++index) {
+        if (capabilities_[index].codec == VideoCodecFamily::H264 &&
+            capabilities_[index].usable) {
+            selectedH264Index_ = index;
+            break;
+        }
+    }
+}
+
 const EncoderCapability* FFmpegEncoderRegistry::SelectedH264() const noexcept {
     return selectedH264Index_ < capabilities_.size() ? &capabilities_[selectedH264Index_] : nullptr;
 }
@@ -135,6 +159,26 @@ std::vector<const EncoderCapability*> FFmpegEncoderRegistry::Candidates(
         for (const auto& capability : capabilities_) {
             if (capability.codec != family || !capability.usable) continue;
             if (!requestedName.empty() && capability.name != requestedName) continue;
+            result.push_back(&capability);
+        }
+    };
+    auto appendHardware = [&](VideoCodecFamily family) {
+        for (const auto& capability : capabilities_) {
+            if (capability.codec != family || !capability.usable ||
+                capability.backend == EncoderBackend::MediaFoundation ||
+                capability.backend == EncoderBackend::Software) {
+                continue;
+            }
+            result.push_back(&capability);
+        }
+    };
+    auto appendNonHardware = [&](VideoCodecFamily family) {
+        for (const auto& capability : capabilities_) {
+            if (capability.codec != family || !capability.usable ||
+                (capability.backend != EncoderBackend::MediaFoundation &&
+                 capability.backend != EncoderBackend::Software)) {
+                continue;
+            }
             result.push_back(&capability);
         }
     };
@@ -171,9 +215,12 @@ std::vector<const EncoderCapability*> FFmpegEncoderRegistry::Candidates(
 
     switch (codec) {
     case VideoCodecPreference::Auto:
-        append(VideoCodecFamily::Av1);
-        append(VideoCodecFamily::Hevc);
-        append(VideoCodecFamily::H264);
+        appendHardware(VideoCodecFamily::Av1);
+        appendHardware(VideoCodecFamily::Hevc);
+        appendHardware(VideoCodecFamily::H264);
+        appendNonHardware(VideoCodecFamily::H264);
+        appendNonHardware(VideoCodecFamily::Hevc);
+        appendNonHardware(VideoCodecFamily::Av1);
         break;
     case VideoCodecPreference::H264:
         append(VideoCodecFamily::H264);

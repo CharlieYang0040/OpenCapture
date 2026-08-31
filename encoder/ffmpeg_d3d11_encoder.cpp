@@ -121,15 +121,17 @@ bool FFmpegD3D11Encoder::Open(std::string encoderName, ID3D11Device* device,
     codecContext_->pix_fmt = softwareInput_ ? AV_PIX_FMT_YUV420P : AV_PIX_FMT_D3D11;
     codecContext_->bit_rate = bitRate;
     codecContext_->gop_size = framesPerSecond * 2;
-    codecContext_->max_b_frames = options.efficiency == EncoderEfficiencyMode::Realtime ? 0 :
-                                 options.efficiency == EncoderEfficiencyMode::Balanced ? 2 : 3;
+    const bool realtime = options.efficiency == EncoderEfficiencyMode::Realtime;
+    const bool quality = options.efficiency == EncoderEfficiencyMode::Quality;
+    codecContext_->max_b_frames = realtime ? 0 : quality ? 3 : 2;
     codecContext_->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-    if (options.efficiency == EncoderEfficiencyMode::Realtime) {
+    if (realtime) {
         codecContext_->flags |= AV_CODEC_FLAG_LOW_DELAY;
     } else {
         codecContext_->rc_max_rate = bitRate + bitRate / 2;
+        const auto bufferRate = quality ? bitRate * 4 : codecContext_->rc_max_rate * 2;
         codecContext_->rc_buffer_size = static_cast<int>(std::min<std::int64_t>(
-            codecContext_->rc_max_rate * 2, std::numeric_limits<int>::max()));
+            bufferRate, std::numeric_limits<int>::max()));
     }
     codecContext_->color_range = AVCOL_RANGE_MPEG;
     codecContext_->colorspace = AVCOL_SPC_BT709;
@@ -137,16 +139,36 @@ bool FFmpegD3D11Encoder::Open(std::string encoderName, ID3D11Device* device,
     codecContext_->color_trc = AVCOL_TRC_BT709;
     if (!softwareInput_) codecContext_->hw_frames_ctx = av_buffer_ref(framesContext_);
     if (encoderName.find("nvenc") != std::string::npos) {
-        const bool realtime = options.efficiency == EncoderEfficiencyMode::Realtime;
         const bool efficient = options.efficiency == EncoderEfficiencyMode::Efficient;
-        av_opt_set(codecContext_->priv_data, "preset", realtime ? "p1" : efficient ? "p5" : "p4", 0);
-        av_opt_set(codecContext_->priv_data, "tune", realtime ? "ull" : "hq", 0);
+        const char* preset = realtime ? "p1" : quality ? "p6" : efficient ? "p5" : "p4";
+        auto setOption = [this](const char* name, const char* value) {
+            const int optionResult = av_opt_set(codecContext_->priv_data, name, value, 0);
+            if (optionResult >= 0) return true;
+            SetError(std::string("Could not configure NVENC option ") + name, optionResult);
+            return false;
+        };
+        if (!setOption("preset", preset) ||
+            !setOption("tune", realtime ? "ull" : "hq")) {
+            Close();
+            return false;
+        }
         if (!realtime) {
-            av_opt_set(codecContext_->priv_data, "rc", "vbr", 0);
-            av_opt_set(codecContext_->priv_data, "spatial-aq", "1", 0);
-            if (efficient) {
-                av_opt_set(codecContext_->priv_data, "temporal-aq", "1", 0);
-                av_opt_set(codecContext_->priv_data, "rc-lookahead", "20", 0);
+            if (!setOption("rc", "vbr") ||
+                !setOption("spatial-aq", "1") ||
+                !setOption("temporal-aq", "0") ||
+                !setOption("rc-lookahead", quality ? "8" : "0")) {
+                Close();
+                return false;
+            }
+            // Keep live game capture bounded. Temporal AQ consumes CUDA resources and
+            // lookahead retains input textures, both of which can stall a game sharing
+            // this GPU. Only the explicitly quality-first mode pays for a short
+            // lookahead, B-frame references, and quarter-resolution two-pass analysis.
+            if (quality && (!setOption("aq-strength", "8") ||
+                            !setOption("b_ref_mode", "middle") ||
+                            !setOption("multipass", "qres"))) {
+                Close();
+                return false;
             }
         }
     }

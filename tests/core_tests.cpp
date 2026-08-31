@@ -208,8 +208,12 @@ void TestRecordingPreferences() {
     using opencapture::SerializeRecordingPreferences;
 
     const auto defaults = DefaultRecordingPreferences();
-    Check(defaults.framesPerSecond == 60 && defaults.quality == 1 && defaults.systemAudio,
-          "recording defaults match the previous UI values");
+    Check(defaults.framesPerSecond == 60 && defaults.quality == 1 && defaults.systemAudio &&
+              defaults.codec == opencapture::VideoCodecPreference::H264 &&
+              defaults.resolution == opencapture::VideoResolutionLimit::Height1080 &&
+              defaults.efficiency == opencapture::EncoderEfficiencyMode::Realtime &&
+              defaults.allowCodecFallback,
+          "recording defaults protect game performance at 1080p60");
     Check(defaults.gifFramesPerSecond == 12 && defaults.gifHeight == 720 &&
               defaults.gifColors == 256,
           "GIF defaults match the previous UI values");
@@ -231,7 +235,10 @@ void TestRecordingPreferences() {
     custom.customBitRateMbps = 4;
     custom.allowCodecFallback = false;
     custom.useCustomBitRate = true;
-    const auto restored = ParseRecordingPreferences(SerializeRecordingPreferences(custom));
+    const auto serializedCustom = SerializeRecordingPreferences(custom);
+    Check(serializedCustom.starts_with("profile_schema=2\n"),
+          "recording settings identify the integrated profile schema");
+    const auto restored = ParseRecordingPreferences(serializedCustom);
     Check(restored == custom, "recording preferences round-trip through the settings file");
 
     const auto clamped = ClampRecordingPreferences(RecordingPreferences{
@@ -266,17 +273,55 @@ void TestRecordingPreferences() {
     Check(ParseRecordingPreferences("fps=not-a-number\nquality=1\n").framesPerSecond == 60,
           "invalid recording values keep the safe default");
 
-    auto compact = opencapture::ApplyRecordingProfile(defaults, opencapture::RecordingProfile::Compact);
-    Check(compact.codec == opencapture::VideoCodecPreference::Auto &&
+    const auto game = opencapture::ApplyRecordingProfile(custom, opencapture::RecordingProfile::Compatibility);
+    Check(game.framesPerSecond == 60 &&
+              game.codec == opencapture::VideoCodecPreference::H264 &&
+              game.resolution == opencapture::VideoResolutionLimit::Height1080 &&
+              game.efficiency == opencapture::EncoderEfficiencyMode::Realtime &&
+              game.allowCodecFallback && !game.useCustomBitRate,
+          "game profile applies a complete low-impact configuration");
+    const auto balanced = opencapture::ApplyRecordingProfile(custom, opencapture::RecordingProfile::Balanced);
+    Check(balanced.framesPerSecond == 60 &&
+              balanced.codec == opencapture::VideoCodecPreference::Hevc &&
+              balanced.resolution == opencapture::VideoResolutionLimit::Height1080 &&
+              balanced.efficiency == opencapture::EncoderEfficiencyMode::Balanced &&
+              balanced.allowCodecFallback && !balanced.useCustomBitRate,
+          "balanced profile applies HEVC 1080p60 with fallback");
+    const auto compact = opencapture::ApplyRecordingProfile(custom, opencapture::RecordingProfile::Compact);
+    Check(compact.codec == opencapture::VideoCodecPreference::Hevc &&
               compact.resolution == opencapture::VideoResolutionLimit::Height1080 &&
-              compact.efficiency == opencapture::EncoderEfficiencyMode::Efficient,
-          "compact profile selects modern codec, 1080p cap, and efficient encoding");
+              compact.efficiency == opencapture::EncoderEfficiencyMode::Balanced &&
+              compact.allowCodecFallback && !compact.useCustomBitRate,
+          "small-file profile selects HEVC, 1080p cap, balanced encoding, and fallback");
     const auto compactH264 = opencapture::RecommendedVideoBitRate(
         compact, 1920, 1080, opencapture::VideoCodecPreference::H264);
     const auto compactHevc = opencapture::RecommendedVideoBitRate(
         compact, 1920, 1080, opencapture::VideoCodecPreference::Hevc);
     Check(compact.framesPerSecond == 30 && compactHevc < compactH264 && compactH264 == 3'500'000,
-          "compact profile uses 30 fps and accounts for codec efficiency");
+          "small-file profile uses 30 fps and accounts for codec efficiency");
+    const auto quality = opencapture::ApplyRecordingProfile(
+        custom, opencapture::RecordingProfile::Quality);
+    Check(quality.framesPerSecond == 60 &&
+              quality.codec == opencapture::VideoCodecPreference::Hevc &&
+              quality.resolution == opencapture::VideoResolutionLimit::Source &&
+              quality.efficiency == opencapture::EncoderEfficiencyMode::Quality &&
+              quality.allowCodecFallback && !quality.useCustomBitRate,
+          "quality-first profile keeps source resolution and enables explicit high-quality effort");
+    Check(opencapture::RecommendedVideoBitRate(
+              quality, 1920, 1080, opencapture::VideoCodecPreference::Hevc) == 14'400'000,
+          "quality-first profile assigns a higher HEVC bitrate budget");
+    Check(opencapture::PredictRecordingGpuPressure(game, 1080) ==
+              opencapture::RecordingGpuPressure::Low &&
+              opencapture::PredictRecordingGpuPressure(balanced, 1080) ==
+              opencapture::RecordingGpuPressure::Moderate &&
+              opencapture::PredictRecordingGpuPressure(quality, 1440) ==
+              opencapture::RecordingGpuPressure::VeryHigh,
+          "GPU pressure prediction separates game, balanced, and quality-first goals");
+    const auto preservedCustom =
+        opencapture::ApplyRecordingProfile(custom, opencapture::RecordingProfile::Custom);
+    Check(preservedCustom.codec == custom.codec && preservedCustom.framesPerSecond == custom.framesPerSecond &&
+              preservedCustom.useCustomBitRate,
+          "custom profile preserves direct user choices");
     Check(opencapture::ResolutionHeightLimit(opencapture::VideoResolutionLimit::Height720) == 720,
           "video resolution limit resolves to an output height");
     Check(opencapture::EstimatedRecordingBytesPerHour(6'000'000, true) == 2'786'400'000ULL,

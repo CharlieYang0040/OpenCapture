@@ -67,7 +67,12 @@ private:
     Microsoft::WRL::ComPtr<ID3D11PixelShader> chromaShader_;
     Microsoft::WRL::ComPtr<ID3D11SamplerState> sampler_;
     Microsoft::WRL::ComPtr<ID3D11Buffer> cropBuffer_;
-    std::array<OutputSlot, 3> outputPool_{};
+    // Leave enough independently referenced textures for B-frame reordering and
+    // asynchronous NVENC work without immediately reusing a render target.
+    // Quality mode can retain 8 lookahead frames in addition to B-frame
+    // reordering and the bounded application queue. Twenty-four slots leave a
+    // safety margin before a render target is reused.
+    std::array<OutputSlot, 24> outputPool_{};
     std::size_t nextOutput_{};
     std::string lastError_;
 };

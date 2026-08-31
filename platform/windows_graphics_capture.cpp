@@ -107,7 +107,8 @@ struct WindowsGraphicsCapture::Impl {
         }
     }
 
-    bool Start(const CaptureTarget& target, ID3D11Device* device) {
+    bool Start(const CaptureTarget& target, ID3D11Device* device,
+               int maximumFramesPerSecond) {
         Stop();
         SetError({});
         if (!target.IsValid() || !device) {
@@ -143,6 +144,14 @@ struct WindowsGraphicsCapture::Impl {
             frameToken = framePool.FrameArrived({this, &Impl::OnFrameArrived});
             closedToken = item.Closed({this, &Impl::OnTargetClosed});
             session = framePool.CreateCaptureSession(item);
+            using winrt::Windows::Foundation::Metadata::ApiInformation;
+            if (maximumFramesPerSecond > 0 &&
+                ApiInformation::IsPropertyPresent(
+                    L"Windows.Graphics.Capture.GraphicsCaptureSession",
+                    L"MinUpdateInterval")) {
+                session.MinUpdateInterval(winrt::Windows::Foundation::TimeSpan{
+                    10'000'000LL / maximumFramesPerSecond});
+            }
             if (borderlessAllowed.load(std::memory_order_acquire)) {
                 try {
                     session.IsBorderRequired(false);
@@ -274,7 +283,10 @@ struct WindowsGraphicsCapture::Impl {
 WindowsGraphicsCapture::WindowsGraphicsCapture() : impl_(std::make_unique<Impl>()) {}
 WindowsGraphicsCapture::~WindowsGraphicsCapture() { Stop(); }
 
-bool WindowsGraphicsCapture::Start(const CaptureTarget& target, ID3D11Device* device) { return impl_->Start(target, device); }
+bool WindowsGraphicsCapture::Start(const CaptureTarget& target, ID3D11Device* device,
+                                   int maximumFramesPerSecond) {
+    return impl_->Start(target, device, maximumFramesPerSecond);
+}
 void WindowsGraphicsCapture::RequestBorderlessAccess() { impl_->RequestBorderlessAccess(); }
 
 void WindowsGraphicsCapture::Stop() noexcept { impl_->Stop(); }

@@ -91,6 +91,21 @@ void ExplainLastItem(const char* text, bool allowWhenDisabled = false) {
     if (ImGui::IsItemHovered(flags)) ImGui::SetTooltip("%s", text);
 }
 
+constexpr std::array kProfileUiOrder{
+    RecordingProfile::Compatibility,
+    RecordingProfile::Balanced,
+    RecordingProfile::Compact,
+    RecordingProfile::Quality,
+    RecordingProfile::Custom,
+};
+
+int ProfileComboIndex(RecordingProfile profile) noexcept {
+    const auto found = std::find(kProfileUiOrder.begin(), kProfileUiOrder.end(), profile);
+    return found == kProfileUiOrder.end()
+        ? 0
+        : static_cast<int>(std::distance(kProfileUiOrder.begin(), found));
+}
+
 struct MainPanelState {
     int activeTab{};
     bool displaySettingsInitialized{};
@@ -113,10 +128,10 @@ struct MainPanelState {
     int quality{1};
     int recordingProfile{static_cast<int>(RecordingProfile::Compatibility)};
     int videoCodec{static_cast<int>(VideoCodecPreference::H264)};
-    int videoResolution{static_cast<int>(VideoResolutionLimit::Source)};
+    int videoResolution{static_cast<int>(VideoResolutionLimit::Height1080)};
     int encoderEfficiency{static_cast<int>(EncoderEfficiencyMode::Realtime)};
     int customBitRateMbps{10};
-    bool allowCodecFallback{};
+    bool allowCodecFallback{true};
     bool useCustomBitRate{};
     bool systemAudio{true};
     bool microphone{};
@@ -564,16 +579,22 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     }
     }
 
-    constexpr std::array formats{"MKV (recommended)", "MP4 copy after recording"};
-    constexpr std::array qualities{"Performance", "Balanced", "Quality"};
+    constexpr std::array formats{"MKV (recommended)", "MP4 after recording"};
     if (panel.activeTab == 1) {
-    constexpr std::array profiles{"Compatibility", "Balanced", "Compact", "Custom"};
+    constexpr std::array profiles{
+        "Game performance", "Balanced", "Small file", "Quality first", "Custom"};
     constexpr std::array resolutions{"Source resolution", "Maximum 1080p", "Maximum 720p"};
     constexpr std::array codecs{"Auto (AV1 > HEVC > H.264)", "H.264", "HEVC", "AV1"};
-    constexpr std::array efficiencies{"Realtime", "Balanced", "Efficient"};
+    constexpr std::array efficiencies{
+        "Realtime (lowest game impact)", "Balanced", "Efficient (more encoder work)",
+        "Quality (highest encoder work)"};
 
     ImGui::SeparatorText("Recording profile");
-    if (ImGui::Combo("Profile", &panel.recordingProfile, profiles.data(), static_cast<int>(profiles.size()))) {
+    int profileComboIndex = ProfileComboIndex(
+        static_cast<RecordingProfile>(panel.recordingProfile));
+    if (ImGui::Combo("Profile", &profileComboIndex, profiles.data(), static_cast<int>(profiles.size()))) {
+        panel.recordingProfile = static_cast<int>(
+            kProfileUiOrder[static_cast<std::size_t>(profileComboIndex)]);
         RecordingPreferences selected{};
         selected.framesPerSecond = panel.fps;
         selected.quality = panel.quality;
@@ -581,16 +602,41 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
         selected.resolution = static_cast<VideoResolutionLimit>(panel.videoResolution);
         selected.efficiency = static_cast<EncoderEfficiencyMode>(panel.encoderEfficiency);
         selected.customBitRateMbps = panel.customBitRateMbps;
+        selected.allowCodecFallback = panel.allowCodecFallback;
+        selected.useCustomBitRate = panel.useCustomBitRate;
         selected = ApplyRecordingProfile(selected, static_cast<RecordingProfile>(panel.recordingProfile));
+        panel.fps = selected.framesPerSecond;
         panel.quality = selected.quality;
         panel.videoCodec = static_cast<int>(selected.codec);
         panel.videoResolution = static_cast<int>(selected.resolution);
         panel.encoderEfficiency = static_cast<int>(selected.efficiency);
+        panel.allowCodecFallback = selected.allowCodecFallback;
         panel.useCustomBitRate = selected.useCustomBitRate;
         panel.selectedEncoder = 0;
         command.applyRecordingSettings = true;
     }
-    ExplainLastItem("Compatibility preserves the previous H.264 path. Compact prioritizes smaller files and modern codecs.");
+    ExplainLastItem("Choose one goal and the FPS, codec, resolution, and encoder effort are set together.");
+    switch (static_cast<RecordingProfile>(panel.recordingProfile)) {
+    case RecordingProfile::Compatibility:
+        ImGui::TextColored(ImVec4(0.45F, 0.9F, 0.55F, 1.0F),
+                           "1080p60 H.264 | lowest game impact | widest playback support");
+        break;
+    case RecordingProfile::Balanced:
+        ImGui::TextColored(ImVec4(0.45F, 0.75F, 1.0F, 1.0F),
+                           "1080p60 HEVC | moderate GPU work | smaller than H.264");
+        break;
+    case RecordingProfile::Compact:
+        ImGui::TextColored(ImVec4(0.75F, 0.7F, 1.0F, 1.0F),
+                           "1080p30 HEVC | smallest preset | no heavy lookahead");
+        break;
+    case RecordingProfile::Quality:
+        ImGui::TextColored(ImVec4(1.0F, 0.75F, 0.3F, 1.0F),
+                           "Source 60 fps HEVC | P6 quality analysis | requires spare GPU capacity");
+        break;
+    case RecordingProfile::Custom:
+        ImGui::TextDisabled("Direct settings are active. Higher effort can reduce game performance.");
+        break;
+    }
     if (ImGui::Combo("Resolution", &panel.videoResolution, resolutions.data(), static_cast<int>(resolutions.size()))) {
         panel.recordingProfile = static_cast<int>(RecordingProfile::Custom);
         panel.useCustomBitRate = false;
@@ -617,16 +663,13 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     if (ImGui::Combo("Format", &panel.format, formats.data(), static_cast<int>(formats.size()))) {
         command.applyRecordingSettings = true;
     }
-    ExplainLastItem("MKV is written safely while recording. MP4 copy remuxes the completed MKV without re-encoding.");
+    ExplainLastItem("MKV is written safely while recording, then remuxed to MP4 without re-encoding. The MKV is removed after success.");
     ImGui::SliderInt("FPS", &panel.fps, 15, 120);
-    if (ImGui::IsItemDeactivatedAfterEdit()) command.applyRecordingSettings = true;
-    ExplainLastItem("Higher FPS makes motion smoother but increases encoder load and file size.");
-    if (panel.recordingProfile == static_cast<int>(RecordingProfile::Compatibility)) {
-        if (ImGui::Combo("Legacy quality", &panel.quality, qualities.data(), static_cast<int>(qualities.size()))) {
-            command.applyRecordingSettings = true;
-        }
-        ExplainLastItem("Preserves the previous 6, 10, and 16 Mbps H.264 choices.");
+    if (ImGui::IsItemDeactivatedAfterEdit()) {
+        panel.recordingProfile = static_cast<int>(RecordingProfile::Custom);
+        command.applyRecordingSettings = true;
     }
+    ExplainLastItem("Higher FPS makes motion smoother but increases encoder load and file size.");
     command.framesPerSecond = panel.fps;
     command.quality = panel.quality;
     command.remuxToMp4 = panel.format == 1;
@@ -655,12 +698,14 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
             }
             ImGui::EndCombo();
         }
-        if (ImGui::Combo("Compression mode", &panel.encoderEfficiency, efficiencies.data(),
+        if (ImGui::Combo("Encoder effort", &panel.encoderEfficiency, efficiencies.data(),
                          static_cast<int>(efficiencies.size()))) {
             panel.recordingProfile = static_cast<int>(RecordingProfile::Custom);
             panel.useCustomBitRate = false;
             command.applyRecordingSettings = true;
         }
+        ExplainLastItem("Realtime protects game responsiveness. Efficient uses P5 without lookahead. "
+                        "Quality uses P6, a short lookahead, B-frame references, and two-pass analysis.");
         if (ImGui::Checkbox("Use a custom target bitrate", &panel.useCustomBitRate)) {
             panel.recordingProfile = static_cast<int>(RecordingProfile::Custom);
             command.applyRecordingSettings = true;
@@ -670,8 +715,12 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
             if (ImGui::IsItemDeactivatedAfterEdit()) command.applyRecordingSettings = true;
         }
         if (ImGui::Checkbox("Allow fallback to a compatible codec", &panel.allowCodecFallback)) {
+            panel.recordingProfile = static_cast<int>(RecordingProfile::Custom);
             command.applyRecordingSettings = true;
         }
+        ImGui::TextDisabled("Color pipeline: SDR BT.709 8-bit (HDR/10-bit recording is not enabled)");
+        ExplainLastItem("HDR capture needs a separate float-to-P010/Main10 path and HDR metadata. "
+                        "The current BGRA8-to-NV12 path records SDR BT.709.");
     }
 
     const int estimateHeight = panel.videoResolution == static_cast<int>(VideoResolutionLimit::Height720) ? 720 : 1080;
@@ -681,6 +730,8 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     estimate.quality = panel.quality;
     estimate.profile = static_cast<RecordingProfile>(panel.recordingProfile);
     estimate.codec = static_cast<VideoCodecPreference>(panel.videoCodec);
+    estimate.resolution = static_cast<VideoResolutionLimit>(panel.videoResolution);
+    estimate.efficiency = static_cast<EncoderEfficiencyMode>(panel.encoderEfficiency);
     estimate.customBitRateMbps = panel.customBitRateMbps;
     estimate.useCustomBitRate = panel.useCustomBitRate;
     const auto estimateCodec = estimate.codec == VideoCodecPreference::Auto ? VideoCodecPreference::Hevc : estimate.codec;
@@ -690,9 +741,32 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
                 static_cast<double>(estimateRate) / 1'000'000.0,
                 static_cast<double>(estimateBytes) / 1'000'000'000.0, estimateHeight);
     ImGui::TextDisabled("Actual size varies with screen content and the selected encoder.");
+    const int pressureHeight = panel.videoResolution == static_cast<int>(VideoResolutionLimit::Source)
+        ? 1440 : estimateHeight;
+    const auto predictedPressure = PredictRecordingGpuPressure(estimate, pressureHeight);
+    switch (predictedPressure) {
+    case RecordingGpuPressure::Low:
+        ImGui::TextColored(ImVec4(0.45F, 0.9F, 0.55F, 1.0F),
+                           "Predicted GPU pressure: Low | best choice while gaming");
+        break;
+    case RecordingGpuPressure::Moderate:
+        ImGui::TextColored(ImVec4(0.45F, 0.75F, 1.0F, 1.0F),
+                           "Predicted GPU pressure: Moderate | normally suitable for gameplay");
+        break;
+    case RecordingGpuPressure::High:
+        ImGui::TextColored(ImVec4(1.0F, 0.75F, 0.3F, 1.0F),
+                           "Predicted GPU pressure: High | reduce effort if the game is GPU-bound");
+        break;
+    case RecordingGpuPressure::VeryHigh:
+        ImGui::TextColored(ImVec4(1.0F, 0.45F, 0.35F, 1.0F),
+                           "Predicted GPU pressure: Very high | use only with spare GPU capacity");
+        break;
+    }
+    ExplainLastItem("Prediction uses encoder effort, codec, FPS, and output-height class. "
+                    "It is guidance, not a measured game benchmark.");
     if (panel.format == 1) {
         ImGui::TextColored(ImVec4(1.0F, 0.75F, 0.25F, 1.0F),
-                           "MP4 copy does not reduce size and keeps the source MKV.");
+                           "The safe MKV is removed only after the MP4 is completed successfully.");
     }
 
     if (ImGui::Checkbox("System audio", &panel.systemAudio)) command.applyRecordingSettings = true;
@@ -724,7 +798,7 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
         command.resetVideoSettings = true;
         command.applyRecordingSettings = true;
     }
-    ExplainLastItem("Restore 60 FPS, balanced quality, MKV, Auto encoder, system audio on, and microphone off.");
+    ExplainLastItem("Restore the 1080p60 H.264 game-performance profile, MKV, system audio on, and microphone off.");
     if (!audioStatus.empty()) {
         ImGui::TextWrapped("Audio: %.*s", static_cast<int>(audioStatus.size()), audioStatus.data());
     }
@@ -950,12 +1024,24 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
                         "They expose real capture or encoder stalls instead of hiding them with duplicate-frame bursts.");
         const double sourceFps = recording.elapsedSeconds > 0.0
             ? static_cast<double>(recording.sourceFrameCount) / recording.elapsedSeconds : 0.0;
-        ImGui::Text("Source: %.1f fps | max gap: %.1f ms | capture drops: %llu | mux peak: %zu",
+        ImGui::Text("Source: %.1f fps | max gap: %.1f ms | capture drops: %llu | realtime drops: %llu",
                     sourceFps, recording.maximumSourceGapMilliseconds,
                     static_cast<unsigned long long>(recording.captureDroppedFrameCount),
-                    recording.muxQueuePeak);
-        ExplainLastItem("A growing mux peak points to slow storage. Capture drops or a large source gap point "
-                        "to capture/GPU scheduling pressure before encoding.");
+                    static_cast<unsigned long long>(recording.processingDroppedFrameCount));
+        ExplainLastItem("Realtime drops discard stale queued frames instead of spending more GPU time catching up. "
+                        "Capture drops or a large source gap point to capture/GPU scheduling pressure.");
+        ImGui::Text("Encoder queue: peak %zu | drops %llu | max submit %.1f ms",
+                    recording.encoderQueuePeak,
+                    static_cast<unsigned long long>(recording.encoderDroppedFrameCount),
+                    recording.maximumEncodeSubmissionMilliseconds);
+        if (recording.maximumEncodeSubmissionMilliseconds > 20.0) {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1.0F, 0.55F, 0.25F, 1.0F), "Encoder pressure");
+        }
+        ExplainLastItem("The bounded worker drops the oldest waiting frame instead of blocking capture. "
+                        "Submit time above the frame budget predicts encoder or GPU contention.");
+        ImGui::Text("Mux queue peak: %zu", recording.muxQueuePeak);
+        ExplainLastItem("A growing mux queue points to slow storage rather than encoder pressure.");
         ImGui::TextWrapped("Output: %.*s", static_cast<int>(recording.outputPath.size()), recording.outputPath.data());
         if (!recording.encoderName.empty()) {
             ImGui::Text("Active encoder: %.*s", static_cast<int>(recording.encoderName.size()), recording.encoderName.data());
@@ -966,11 +1052,11 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
         }
     }
     if (!recording.active && !mediaBusy && recording.canRemux) {
-        if (ImGui::Button("Create MP4 copy", ImVec2(180.0F, 34.0F))) {
+        if (ImGui::Button("Convert to MP4", ImVec2(180.0F, 34.0F))) {
             command.remuxLastRecording = true;
         }
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Remux the last MKV without re-encoding. The source MKV is kept.");
+            ImGui::SetTooltip("Remux the last MKV without re-encoding, then remove the MKV after success.");
         }
     }
     if (!remuxStatus.empty()) {

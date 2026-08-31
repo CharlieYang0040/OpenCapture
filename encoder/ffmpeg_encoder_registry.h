@@ -38,6 +38,8 @@ struct EncoderCapability {
 class FFmpegEncoderRegistry final {
 public:
     void Probe(std::uint32_t d3dAdapterVendorId);
+    void RecordD3D11OpenResult(std::string_view encoderName, bool opened,
+                               std::string detail);
 
     [[nodiscard]] const std::vector<EncoderCapability>& Capabilities() const noexcept { return capabilities_; }
     [[nodiscard]] const EncoderCapability* SelectedH264() const noexcept;
@@ -49,6 +51,7 @@ public:
     [[nodiscard]] std::string Summary() const;
 
 private:
+    void RefreshSelectedH264() noexcept;
     std::vector<EncoderCapability> capabilities_;
     std::size_t selectedH264Index_{static_cast<std::size_t>(-1)};
 };
