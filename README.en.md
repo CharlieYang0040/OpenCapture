@@ -6,8 +6,8 @@ OpenCapture is a native screen capture application for Windows 10 and 11. Its go
 
 The project is an actively developed technical prototype. It can capture a window, monitor, or region with Windows Graphics Capture, crop and scale on D3D11, and produce H.264, HEVC, or AV1 video with AAC in MKV/MP4, palette-optimized GIFs, or PNG/clipboard still captures.
 
-The latest technical preview is [OpenCapture v0.2.4](https://github.com/CharlieYang0040/OpenCapture/releases/tag/v0.2.4).
-See the [v0.2.4 release notes](docs/releases/v0.2.4.md) for its exact scope and validation boundary.
+The latest technical preview is [OpenCapture v0.2.5](https://github.com/CharlieYang0040/OpenCapture/releases/tag/v0.2.5).
+See the [v0.2.5 release notes](docs/releases/v0.2.5.md) for its exact scope and validation boundary.
 
 ## Goals
 
@@ -33,8 +33,11 @@ Implemented:
 - D3D11 shader crop, scale, and BGRA-to-NV12 conversion
 - H.264, HEVC, and AV1 hardware selection with codec-aware safe fallback
 - GPU-scaled recording at source size, a 1080p maximum, or a 720p maximum
-- Compatibility, Balanced, Compact, and Custom profiles with an hourly size estimate
-- NVENC Realtime, Balanced, and Efficient modes plus a custom target bitrate
+- Game Performance, Balanced, Small File, Quality First, and Custom profiles with an hourly size estimate
+- NVENC Realtime, Balanced, bounded Efficient, and explicit Quality modes plus a custom target bitrate
+- Latest-frame-first overload handling with realtime-drop and encoder-submit diagnostics
+- A four-frame bounded video-encoder worker and preset-based predicted GPU-pressure guidance
+- Startup D3D11 encoder-open validation with active-GPU hardware priority for Auto selection
 - Recording controls with the active encoder, output size, and target bitrate
 - PNG output, clipboard-only capture, and combined save-and-copy
 - Diskless Windows clipboard transfer through `CF_DIBV5`
@@ -44,7 +47,7 @@ Implemented:
 - Incomplete-MKV discovery and output collision avoidance
 - UI recovery that validates incomplete MKV streams before choosing a collision-free final name
 - Recording pause/resume with paused time removed from the output timeline
-- MP4 remux copies that preserve the safe MKV source
+- MP4 remux without re-encoding, removing the safe MKV source only after success
 - GIF recording from the same targets and saved region presets
 - Selectable GIF output at 360p, 480p, 720p, or 1080p; 6-30 fps; and 64-256 colors
 - GPU-scaled low-FPS source recording and FFmpeg two-pass palettegen/paletteuse conversion
@@ -110,13 +113,13 @@ OpenCapture currently requires no credentials. Do not commit credentials or mach
 
 ## Install a release build
 
-Download `OpenCapture-0.2.4-windows-x64.zip` and `SHA256SUMS.txt` from GitHub Releases,
+Download `OpenCapture-0.2.5-windows-x64.zip` and `SHA256SUMS.txt` from GitHub Releases,
 verify the SHA-256, and extract the entire ZIP into one folder. Keep the DLLs and `licenses`
 directory beside `OpenCapture.exe`. This technical preview is not yet Authenticode-signed and
 may trigger SmartScreen or corporate security controls.
 Corresponding FFmpeg source references, the exact vcpkg port and patches, and the linked build
 configuration are included in the release ZIP and the separate
-`OpenCapture-0.2.4-ffmpeg-build-materials.zip` asset.
+`OpenCapture-0.2.5-ffmpeg-build-materials.zip` asset.
 
 ## Quick start on a new PC
 
@@ -146,7 +149,7 @@ Use these options to build Release or only prepare the tooling:
 After a successful Release build, reproduce the verified distribution ZIP with:
 
 ```powershell
-.\scripts\package_release.ps1 -Version 0.2.4
+.\scripts\package_release.ps1 -Version 0.2.5
 ```
 
 ### Build flow

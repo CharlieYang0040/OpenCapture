@@ -12,6 +12,7 @@
 #include "encoder/ffmpeg_d3d11_encoder.h"
 #include "encoder/ffmpeg_encoder_registry.h"
 #include "encoder/ffmpeg_muxer.h"
+#include "encoder/video_encoder_worker.h"
 #include "encoder/ffmpeg_gif_converter.h"
 #include "core/hotkey.h"
 #include "core/recording_options.h"
@@ -68,6 +69,8 @@ private:
     bool ProcessRecordingFrame(CapturedFrame frame);
     bool ProcessScreenshotFrame(const CapturedFrame& frame);
     bool SendRecordingFrame(const ProcessedFrame& frame, std::int64_t presentationTimestamp);
+    bool PollVideoEncoderWorker();
+    void RefreshVideoEncoderDiagnostics() noexcept;
     void PumpRecordingClock();
     void PumpRecordingAudio(bool finalDrain = false);
     bool StartRecording(int framesPerSecond, int quality, std::string requestedEncoder = {},
@@ -98,6 +101,7 @@ private:
     bool StartQuickCapture();
     bool RunNvencSmoke(const ProcessedFrame& frame);
     bool RunEncoderFallbackSmoke();
+    void ValidateEncoderOpenCapabilities();
     bool RunScreenshotSmoke();
     void HandleHotkey(HotkeyAction action);
     void LoadUiScaleSettings();
@@ -149,6 +153,7 @@ private:
     std::uint32_t adapterVendorId_{};
     FFmpegEncoderRegistry encoderRegistry_;
     FFmpegD3D11Encoder videoEncoder_;
+    VideoEncoderWorker videoEncoderWorker_;
     FFmpegAudioEncoder audioEncoder_;
     FFmpegMuxer muxer_;
     FFmpegGifConverter gifConverter_;
@@ -193,8 +198,12 @@ private:
     std::uint64_t recordingFrameCount_{};
     std::uint64_t recordingSourceFrameCount_{};
     std::uint64_t recordingSkippedFrameTicks_{};
+    std::uint64_t recordingProcessingDroppedFrameCount_{};
+    std::uint64_t recordingEncoderDroppedFrameCount_{};
+    std::size_t recordingEncoderQueuePeak_{};
     std::int64_t recordingPreviousSourceQpc_{};
     double recordingMaximumSourceGapMilliseconds_{};
+    double recordingMaximumEncodeSubmissionMilliseconds_{};
     double recordingElapsedSeconds_{};
     CaptureTargetPicker targetPicker_;
     CaptureTargetOverlay targetOverlay_;

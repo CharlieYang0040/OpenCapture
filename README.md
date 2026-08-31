@@ -6,8 +6,8 @@ OpenCapture는 Windows 10/11을 위한 네이티브 화면 캡처 애플리케�
 
 현재는 활발히 개발 중인 기술 시제품 단계입니다. 창·모니터·영역을 Windows Graphics Capture로 받아 D3D11에서 자르기와 크기 조절을 수행하고, H.264·HEVC·AV1/AAC MKV·MP4, 팔레트 최적화 GIF 또는 PNG·클립보드 캡처로 출력할 수 있습니다.
 
-최신 기술 프리뷰는 [OpenCapture v0.2.4](https://github.com/CharlieYang0040/OpenCapture/releases/tag/v0.2.4)이며,
-상세 변경 및 검증 범위는 [v0.2.4 릴리스 노트](docs/releases/v0.2.4.md)에 기록합니다.
+최신 기술 프리뷰는 [OpenCapture v0.2.5](https://github.com/CharlieYang0040/OpenCapture/releases/tag/v0.2.5)이며,
+상세 변경 및 검증 범위는 [v0.2.5 릴리스 노트](docs/releases/v0.2.5.md)에 기록합니다.
 
 ## 주요 목표
 
@@ -33,8 +33,11 @@ OpenCapture는 Windows 10/11을 위한 네이티브 화면 캡처 애플리케�
 - D3D11 shader 기반 crop, scale 및 BGRA-to-NV12 변환
 - H.264·HEVC·AV1 하드웨어 인코더 선택과 코덱별 안전 폴백
 - 원본·최대 1080p·최대 720p GPU 축소 녹화
-- 호환성·균형·용량 절약·사용자 지정 프로필과 시간당 예상 용량
-- NVENC 실시간·균형·고효율 압축 모드 및 사용자 지정 목표 비트레이트
+- 게임 성능·균형·용량 절약·품질 우선·직접 설정 프로필과 시간당 예상 용량
+- 실시간 게임을 보호하도록 bounded 처리된 NVENC 실시간·균형·고효율 모드, 명시적인 품질 모드 및 사용자 지정 목표 비트레이트
+- 적체된 과거 프레임 대신 최신 프레임을 우선하는 실시간 드롭과 인코더 제출 지연 진단
+- 캡처/UI를 막지 않는 4프레임 bounded 비디오 인코더 worker와 프리셋별 예측 GPU 압력 안내
+- 앱 시작 시 실제 D3D11 encoder-open을 검증하고 활성 GPU 하드웨어를 우선하는 Auto 선택
 - 녹화 시작·중지와 실제 활성 인코더·출력 해상도·비트레이트 표시
 - 선택 대상 PNG 저장, 클립보드 전용 복사 및 저장 후 복사
 - 임시 파일 없이 Windows `CF_DIBV5`로 전달하는 클립보드 경로
@@ -44,7 +47,7 @@ OpenCapture는 Windows 10/11을 위한 네이티브 화면 캡처 애플리케�
 - 미완료 MKV 검색과 기존 파일 충돌 방지
 - FFmpeg 판독 후 미완료 MKV를 충돌 없는 최종 이름으로 복구하는 UI
 - 결과 타임라인에서 정지 구간을 제거하는 녹화 일시정지·재개
-- 안전 MKV를 보존하면서 만드는 MP4 무재인코딩 복사본
+- 안전 MKV를 MP4로 무재인코딩 remux하고 성공 후 원본 MKV 제거
 - 영역 프리셋과 동일한 대상을 사용하는 GIF 녹화
 - GIF 360p·480p·720p·1080p, 6~30fps 및 64~256색 선택
 - GPU 축소와 저FPS 소스 기록, FFmpeg 2-pass palettegen/paletteuse 변환
@@ -84,6 +87,7 @@ OpenCapture는 Windows 10/11을 위한 네이티브 화면 캡처 애플리케�
   녹화 시작 시 D3D11 인코더 열기를 검증하고 자동 모드에서는 다음 호환 코덱으로 폴백
 
 전체 개발 순서와 성능 기준은 [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md)에서 확인할 수 있습니다.
+최신 녹화 기술 비교와 최적화 근거는 [녹화 기술 심층 검토](docs/recording-technology-review-2026-08-31.md)에 정리했습니다.
 
 ## 회사 PC 보안 관련 동작
 
@@ -110,12 +114,12 @@ OpenCapture 자체에는 API 키나 계정 정보가 필요하지 않습니다. 
 
 ## 배포본 설치
 
-GitHub Releases에서 `OpenCapture-0.2.4-windows-x64.zip`과 `SHA256SUMS.txt`를 받은 뒤
+GitHub Releases에서 `OpenCapture-0.2.5-windows-x64.zip`과 `SHA256SUMS.txt`를 받은 뒤
 SHA-256을 확인하고 ZIP 전체를 한 폴더에 압축 해제합니다. DLL과 `licenses` 폴더를
 `OpenCapture.exe`와 같은 배포 구조로 유지해야 합니다. 이 기술 프리뷰는 아직
 Authenticode 서명되지 않았으므로 SmartScreen이나 회사 보안 정책이 경고할 수 있습니다.
 FFmpeg 대응 소스 링크, 실제 vcpkg 포트/패치와 빌드 설정은 배포 ZIP과 별도
-`OpenCapture-0.2.4-ffmpeg-build-materials.zip`에 함께 제공합니다.
+`OpenCapture-0.2.5-ffmpeg-build-materials.zip`에 함께 제공합니다.
 
 ## 새 PC에서 빠르게 시작하기
 
@@ -153,7 +157,7 @@ Release 빌드 또는 도구만 준비하려면 다음 옵션을 사용합니다
 검증된 배포 ZIP은 Release 빌드 후 다음 명령으로 재현합니다.
 
 ```powershell
-.\scripts\package_release.ps1 -Version 0.2.4
+.\scripts\package_release.ps1 -Version 0.2.5
 ```
 
 ### 빌드 흐름

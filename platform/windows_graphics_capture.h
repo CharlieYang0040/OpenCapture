@@ -27,7 +27,8 @@ public:
     WindowsGraphicsCapture(const WindowsGraphicsCapture&) = delete;
     WindowsGraphicsCapture& operator=(const WindowsGraphicsCapture&) = delete;
 
-    bool Start(const CaptureTarget& target, ID3D11Device* device);
+    bool Start(const CaptureTarget& target, ID3D11Device* device,
+               int maximumFramesPerSecond = 0);
     void RequestBorderlessAccess();
     void Stop() noexcept;
     [[nodiscard]] std::optional<CapturedFrame> TryPopFrame();
