@@ -1,5 +1,6 @@
 #include "platform/win32_d3d11_app.h"
 
+#include "app/resource.h"
 #include "ui/main_panel.h"
 
 #include <imgui.h>
@@ -229,7 +230,7 @@ void Win32D3D11App::LoadRecordingSettings() {
     input.close();
     const auto serialized = text.str();
     const auto parsed = ParseRecordingPreferences(serialized);
-    const bool currentProfileSchema = serialized.find("profile_schema=2") != std::string::npos;
+    const bool currentProfileSchema = serialized.find("profile_schema=3") != std::string::npos;
     recordingPreferences_ = currentProfileSchema || parsed.profile == RecordingProfile::Custom
         ? parsed
         : ApplyRecordingProfile(parsed, parsed.profile);
@@ -497,6 +498,12 @@ bool Win32D3D11App::Initialize(HINSTANCE instance, int showCommand) {
     windowClass.style = CS_CLASSDC;
     windowClass.lpfnWndProc = WindowProc;
     windowClass.hInstance = instance_;
+    windowClass.hIcon = static_cast<HICON>(LoadImageW(
+        instance_, MAKEINTRESOURCEW(IDI_OPENCAPTURE), IMAGE_ICON,
+        GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), LR_SHARED));
+    windowClass.hIconSm = static_cast<HICON>(LoadImageW(
+        instance_, MAKEINTRESOURCEW(IDI_OPENCAPTURE), IMAGE_ICON,
+        GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_SHARED));
     windowClass.hCursor = LoadCursor(nullptr, IDC_ARROW);
     windowClass.lpszClassName = kWindowClass;
     if (!RegisterClassExW(&windowClass)) return false;

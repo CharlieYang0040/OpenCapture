@@ -623,15 +623,15 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
         break;
     case RecordingProfile::Balanced:
         ImGui::TextColored(ImVec4(0.45F, 0.75F, 1.0F, 1.0F),
-                           "1080p60 HEVC | moderate GPU work | smaller than H.264");
+                           "1080p60 Auto codec | moderate GPU work");
         break;
     case RecordingProfile::Compact:
         ImGui::TextColored(ImVec4(0.75F, 0.7F, 1.0F, 1.0F),
-                           "1080p30 HEVC | smallest preset | no heavy lookahead");
+                           "1080p30 Auto codec | smallest preset | no heavy lookahead");
         break;
     case RecordingProfile::Quality:
         ImGui::TextColored(ImVec4(1.0F, 0.75F, 0.3F, 1.0F),
-                           "Source 60 fps HEVC | P6 quality analysis | requires spare GPU capacity");
+                           "Source 60 fps Auto codec | P6 quality analysis | requires spare GPU capacity");
         break;
     case RecordingProfile::Custom:
         ImGui::TextDisabled("Direct settings are active. Higher effort can reduce game performance.");

@@ -1,5 +1,7 @@
 #include "platform/system_tray.h"
 
+#include "app/resource.h"
+
 #include <windowsx.h>
 
 namespace opencapture {
@@ -20,8 +22,10 @@ bool SystemTray::Initialize(HWND owner, HINSTANCE instance) {
     Shutdown();
     if (!owner) return false;
     owner_ = owner;
-    static_cast<void>(instance);
-    icon_ = LoadIconW(nullptr, IDI_APPLICATION);
+    icon_ = static_cast<HICON>(LoadImageW(
+        instance, MAKEINTRESOURCEW(IDI_OPENCAPTURE), IMAGE_ICON,
+        GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_SHARED));
+    if (!icon_) icon_ = LoadIconW(nullptr, IDI_APPLICATION);
     taskbarCreatedMessage_ = RegisterWindowMessageW(L"TaskbarCreated");
     data_ = {};
     data_.cbSize = sizeof(data_);
