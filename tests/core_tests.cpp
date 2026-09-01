@@ -236,7 +236,7 @@ void TestRecordingPreferences() {
     custom.allowCodecFallback = false;
     custom.useCustomBitRate = true;
     const auto serializedCustom = SerializeRecordingPreferences(custom);
-    Check(serializedCustom.starts_with("profile_schema=2\n"),
+    Check(serializedCustom.starts_with("profile_schema=3\n"),
           "recording settings identify the integrated profile schema");
     const auto restored = ParseRecordingPreferences(serializedCustom);
     Check(restored == custom, "recording preferences round-trip through the settings file");
@@ -282,17 +282,17 @@ void TestRecordingPreferences() {
           "game profile applies a complete low-impact configuration");
     const auto balanced = opencapture::ApplyRecordingProfile(custom, opencapture::RecordingProfile::Balanced);
     Check(balanced.framesPerSecond == 60 &&
-              balanced.codec == opencapture::VideoCodecPreference::Hevc &&
+              balanced.codec == opencapture::VideoCodecPreference::Auto &&
               balanced.resolution == opencapture::VideoResolutionLimit::Height1080 &&
               balanced.efficiency == opencapture::EncoderEfficiencyMode::Balanced &&
               balanced.allowCodecFallback && !balanced.useCustomBitRate,
-          "balanced profile applies HEVC 1080p60 with fallback");
+          "balanced profile applies automatic codec selection at 1080p60 with fallback");
     const auto compact = opencapture::ApplyRecordingProfile(custom, opencapture::RecordingProfile::Compact);
-    Check(compact.codec == opencapture::VideoCodecPreference::Hevc &&
+    Check(compact.codec == opencapture::VideoCodecPreference::Auto &&
               compact.resolution == opencapture::VideoResolutionLimit::Height1080 &&
               compact.efficiency == opencapture::EncoderEfficiencyMode::Balanced &&
               compact.allowCodecFallback && !compact.useCustomBitRate,
-          "small-file profile selects HEVC, 1080p cap, balanced encoding, and fallback");
+          "small-file profile selects an automatic codec, 1080p cap, balanced encoding, and fallback");
     const auto compactH264 = opencapture::RecommendedVideoBitRate(
         compact, 1920, 1080, opencapture::VideoCodecPreference::H264);
     const auto compactHevc = opencapture::RecommendedVideoBitRate(
@@ -302,7 +302,7 @@ void TestRecordingPreferences() {
     const auto quality = opencapture::ApplyRecordingProfile(
         custom, opencapture::RecordingProfile::Quality);
     Check(quality.framesPerSecond == 60 &&
-              quality.codec == opencapture::VideoCodecPreference::Hevc &&
+              quality.codec == opencapture::VideoCodecPreference::Auto &&
               quality.resolution == opencapture::VideoResolutionLimit::Source &&
               quality.efficiency == opencapture::EncoderEfficiencyMode::Quality &&
               quality.allowCodecFallback && !quality.useCustomBitRate,

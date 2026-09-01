@@ -165,7 +165,7 @@ RecordingPreferences ParseRecordingPreferences(std::string_view text,
 std::string SerializeRecordingPreferences(const RecordingPreferences& preferences) {
     const auto clamped = ClampRecordingPreferences(preferences);
     std::ostringstream output;
-    output << "profile_schema=2\n"
+    output << "profile_schema=3\n"
            << "fps=" << clamped.framesPerSecond << '\n'
            << "quality=" << clamped.quality << '\n'
            << "remux_to_mp4=" << (clamped.remuxToMp4 ? 1 : 0) << '\n'
@@ -200,7 +200,7 @@ RecordingPreferences ApplyRecordingProfile(RecordingPreferences preferences,
         break;
     case RecordingProfile::Balanced:
         preferences.framesPerSecond = 60;
-        preferences.codec = VideoCodecPreference::Hevc;
+        preferences.codec = VideoCodecPreference::Auto;
         preferences.resolution = VideoResolutionLimit::Height1080;
         preferences.efficiency = EncoderEfficiencyMode::Balanced;
         preferences.quality = 1;
@@ -208,7 +208,7 @@ RecordingPreferences ApplyRecordingProfile(RecordingPreferences preferences,
         break;
     case RecordingProfile::Compact:
         preferences.framesPerSecond = 30;
-        preferences.codec = VideoCodecPreference::Hevc;
+        preferences.codec = VideoCodecPreference::Auto;
         preferences.resolution = VideoResolutionLimit::Height1080;
         preferences.efficiency = EncoderEfficiencyMode::Balanced;
         preferences.quality = 0;
@@ -216,7 +216,7 @@ RecordingPreferences ApplyRecordingProfile(RecordingPreferences preferences,
         break;
     case RecordingProfile::Quality:
         preferences.framesPerSecond = 60;
-        preferences.codec = VideoCodecPreference::Hevc;
+        preferences.codec = VideoCodecPreference::Auto;
         preferences.resolution = VideoResolutionLimit::Source;
         preferences.efficiency = EncoderEfficiencyMode::Quality;
         preferences.quality = 2;

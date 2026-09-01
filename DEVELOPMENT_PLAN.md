@@ -583,7 +583,7 @@ OpenCapture/
 - `.part.mkv` 안전 저장, 시작 전 공간 검사, 미완료 파일 검색 및 검증 후 복구
 - 정지 구간을 영상·오디오 타임라인에서 제거하는 녹화 일시정지/재개
 - H.264/AAC MP4 무재인코딩 remux 성공 후 원본 MKV 제거
-- 게임 성능(1080p60 H.264)·균형(1080p60 HEVC)·용량 절약(1080p30 HEVC)·직접 설정 녹화 프로필
+- 게임 성능(1080p60 H.264)·균형(1080p60 Auto)·용량 절약(1080p30 Auto)·품질 우선(원본 60fps Auto)·직접 설정 녹화 프로필
 - Temporal AQ와 lookahead를 배제한 실시간 안전 Efficient 모드, 8개 GPU 출력 텍스처 풀
 - 처리 적체 시 오래된 프레임을 버리고 최신 프레임을 우선하며 실시간 드롭·인코더 제출 지연을 UI에 표시
 - GPU에서 종횡비를 유지해 축소한 저FPS 소스와 FFmpeg 2-pass 팔레트를 사용하는 GIF
@@ -865,7 +865,7 @@ Capture/Video/GIF/Settings 탭, 적응형 DPI UI와 opt-in 알림 영역 상주�
 - remux 정상·이름 충돌·손상 입력 스모크와 자동 MP4 녹화 스모크를 통과했다.
 - 녹화 프로필은 게임 성능·균형·용량 절약·품질 우선 선택 시 FPS·코덱·최대 해상도·인코더 강도·fallback을 함께 확정한다.
 - Efficient는 P5 압축을 유지하되 게임과 경쟁하는 Temporal AQ 및 20프레임 lookahead를 사용하지 않는다.
-- 품질 우선은 원본 해상도 HEVC 60fps, P6, 제한된 8프레임 lookahead, 3 B-frame middle reference와 quarter-resolution multipass를 명시적으로 선택한다.
+- 품질 우선은 원본 해상도 Auto codec 60fps, P6, 제한된 8프레임 lookahead, 3 B-frame middle reference와 quarter-resolution multipass를 명시적으로 선택한다.
 - Windows build 26100 이상은 녹화 FPS를 WGC `MinUpdateInterval`에 전달하고, quality lookahead·B-frame·bounded worker가 참조 중인 프레임의 조기 재사용을 막도록 NV12 출력 풀을 24개로 유지한다.
 - 영상 `Send/Receive/Flush`는 4프레임 bounded worker가 전담한다. worker가 밀리면 가장 오래된 대기 프레임을 버리고 캡처/UI 스레드는 기다리지 않는다.
 - UI의 GPU 압력은 encoder effort·codec·FPS·해상도 등급으로 계산한 사전 예측이며 실제 게임 benchmark로 표시하지 않는다.

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(OpenCapture VERSION 0.2.5 LANGUAGES CXX)
+project(OpenCapture VERSION 0.2.6 LANGUAGES CXX)
 
 if(NOT WIN32)
     message(FATAL_ERROR "OpenCapture is a Windows-only application")
@@ -59,6 +59,8 @@ if(OPENCAPTURE_BUILD_APP)
 
     add_executable(OpenCapture WIN32
         ${CMAKE_CURRENT_BINARY_DIR}/OpenCapture.rc
+        app/resource.h
+        assets/opencapture.ico
         app/main.cpp
         encoder/ffmpeg_audio_encoder.cpp
         encoder/ffmpeg_d3d11_encoder.cpp
