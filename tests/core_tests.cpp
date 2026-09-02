@@ -376,6 +376,8 @@ void TestI18nTables() {
     SetLanguage(Language::English);
 }
 
+} // namespace
+
 int main() {
     TestBoundedQueue();
     TestSessionState();

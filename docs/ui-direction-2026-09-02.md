@@ -285,6 +285,7 @@ OBS식 실시간 장면 합성은 제품 목표가 아니다.
 - `DXGI_SWAP_EFFECT_FLIP_DISCARD`, occluded 시 Present 생략
 - OpenCapture 다크 테마, 카드 레이아웃, 헤더 상태 필, 프로필 카드
 - 한국어/영어 테이블과 런타임 전환. 기본값은 Windows UI 언어
+- MSVC `/utf-8`로 UTF-8 문자열 테이블을 그대로 컴파일
 - Segoe UI + Malgun Gothic 병합. 배포본에 TTF를 넣지 않음
 - 제목+본문 툴팁(지연 호버, 키보드 포커스)
 - Settings 고급/진단 기본 접힘. 모양 설정은 슬라이더를 놓으면 즉시 저장

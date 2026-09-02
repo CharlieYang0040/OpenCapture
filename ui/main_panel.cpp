@@ -325,7 +325,7 @@ void DrawHeader(MainPanelCommand& command, const RecordingUiState& recording,
     EndCard();
 }
 
-void DrawRecordingStrip(const RecordingUiState& recording) {
+void DrawStatusBar(const RecordingUiState& recording) {
     if (!recording.active && recording.outputPath.empty()) return;
     BeginCard("recording-strip");
     ImGui::Text("%s: %llu | %s: %llu | %s: %llu | %.2f s",
@@ -1206,7 +1206,7 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     ImGui::Begin("OpenCapture", nullptr, flags);
 
     DrawHeader(command, recording, outputDirectory, picker);
-    if (recording.active || !recording.outputPath.empty()) DrawRecordingStrip(recording);
+    if (recording.active || !recording.outputPath.empty()) DrawStatusBar(recording);
 
     if (ImGui::BeginTabBar("MainSections")) {
         ImGuiTabItemFlags captureFlags = 0;

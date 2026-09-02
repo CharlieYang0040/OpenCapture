@@ -531,6 +531,7 @@ std::optional<CaptureTarget> PickTemporaryRegion(HWND owner);
 같은 날짜의 구현은 Dear ImGui를 유지한 채 다음을 적용한다.
 
 - 한/영 문자열 테이블과 Windows `malgun.ttf` 병합. 창 제목 한글은 언어와 무관하게 표시
+- MSVC `/utf-8`로 UTF-8 UI 문자열을 소스 그대로 컴파일
 - OpenCapture 다크 토큰, 카드 레이아웃, 상태 필이 있는 헤더
 - Capture 홈(대상 → 스크린샷), Video 프로필 카드, GIF 단순화, Settings 접이식 그룹
 - 호버·포커스에서 제목+본문 툴팁

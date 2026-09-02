@@ -54,7 +54,7 @@ UiFontStatus LoadUiFonts() {
     latin.OversampleV = 1;
     latin.PixelSnapH = true;
 
-    const auto segoe = FirstExisting({L"segoeui.ttf", L"segoeuisl.ttf", L"tahoma.ttf"});
+    const auto segoe = FirstExisting({L"segoeui.ttf", L"segoeuib.ttf", L"segoeuisl.ttf", L"tahoma.ttf"});
     ImFont* font = nullptr;
     if (!segoe.empty()) {
         const auto path = ToUtf8Path(segoe);
