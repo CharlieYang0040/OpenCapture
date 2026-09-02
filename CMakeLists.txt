@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(OpenCapture VERSION 0.2.7 LANGUAGES CXX)
+project(OpenCapture VERSION 0.2.8 LANGUAGES CXX)
 
 if(NOT WIN32)
     message(FATAL_ERROR "OpenCapture is a Windows-only application")
@@ -63,6 +63,7 @@ if(OPENCAPTURE_BUILD_APP)
     find_library(AVCODEC_LIBRARY avcodec REQUIRED)
     find_library(AVFILTER_LIBRARY avfilter REQUIRED)
     find_library(AVFORMAT_LIBRARY avformat REQUIRED)
+    find_library(SWSCALE_LIBRARY swscale REQUIRED)
 
     configure_file(
         app/OpenCapture.rc.in
@@ -81,6 +82,7 @@ if(OPENCAPTURE_BUILD_APP)
         encoder/ffmpeg_muxer.cpp
         encoder/video_encoder_worker.cpp
         encoder/ffmpeg_gif_converter.cpp
+        encoder/ffmpeg_animation_converter.cpp
         gpu/d3d11_frame_processor.cpp
         image/screenshot_service.cpp
         platform/capture_target_overlay.cpp
@@ -104,6 +106,7 @@ if(OPENCAPTURE_BUILD_APP)
         ${AVCODEC_LIBRARY}
         ${AVFILTER_LIBRARY}
         ${AVFORMAT_LIBRARY}
+        ${SWSCALE_LIBRARY}
         d3d11
         d3dcompiler
         dxgi

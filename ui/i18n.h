@@ -24,24 +24,24 @@ enum class Language { English, Korean };
     X(status_recording, "Recording", "녹화 중") \
     X(status_paused, "Paused", "일시정지") \
     X(status_error, "Error", "오류") \
-    X(status_gif, "GIF recording", "GIF 녹화") \
-    X(status_converting, "Converting GIF...", "GIF 변환 중...") \
+    X(status_gif, "Animation recording", "애니메이션 녹화") \
+    X(status_converting, "Creating animation...", "애니메이션 생성 중...") \
     X(header_target, "Target", "대상") \
     X(header_output, "Output", "출력") \
     X(header_change_target, "Change target", "대상 변경") \
     X(header_quick_capture, "Quick Capture", "빠른 캡처") \
-    X(tooltip_quick_capture_title, "One-time region screenshot", "일회성 영역 스크린샷") \
+    X(tooltip_quick_capture_title, "One-time region action", "일회성 영역 작업") \
     X(tooltip_quick_capture_body, \
-        "Select a temporary area and capture it without changing the saved window, region, or monitor target. Uses the screenshot shortcut result below.", \
-        "저장된 창·영역·모니터 대상을 바꾸지 않고 임시 영역만 잡아 캡처합니다. 아래의 스크린샷 단축키 결과 설정을 따릅니다.") \
+        "Select a temporary area, then choose Screenshot, Video, or Animation without changing the saved target.", \
+        "저장된 대상을 바꾸지 않고 임시 영역을 선택한 뒤 스크린샷, 비디오, 애니메이션 중 하나를 실행합니다.") \
     X(tooltip_change_target_title, "Choose capture source", "캡처 대상 선택") \
     X(tooltip_change_target_body, \
-        "Screenshots, video, and GIF all use this same target. Pick a window, a rectangle, or a whole monitor.", \
-        "스크린샷, 비디오, GIF가 모두 이 대상을 사용합니다. 창, 사각형 영역, 모니터 전체 중에서 고릅니다.") \
+        "Screenshots, video, and animation all use this same target. Pick a window, a rectangle, or a whole monitor.", \
+        "스크린샷, 비디오, 애니메이션이 모두 이 대상을 사용합니다. 창, 사각형 영역, 모니터 전체 중에서 고릅니다.") \
     X(pause, "Pause", "일시정지") \
     X(resume, "Resume", "재개") \
     X(stop_video, "Stop video", "비디오 중지") \
-    X(stop_gif, "Stop GIF", "GIF 중지") \
+    X(stop_gif, "Stop animation", "애니메이션 중지") \
     X(tooltip_pause_title, "Pause recording", "녹화 일시정지") \
     X(tooltip_pause_body, \
         "Stops writing video and audio into the current file without finalizing it. Resume continues the same recording. Paused time is removed from the output timeline.", \
@@ -54,13 +54,13 @@ enum class Language { English, Korean };
     X(tooltip_stop_video_body, \
         "Finalize the current video so a media player can open it. A safe .part.mkv file is renamed only after the recording closes cleanly.", \
         "미디어 플레이어가 열 수 있도록 현재 비디오를 마무리합니다. 안전 .part.mkv 파일은 정상 종료 후에만 최종 이름으로 바뀝니다.") \
-    X(tooltip_stop_gif_title, "Stop and create GIF", "중지 후 GIF 만들기") \
+    X(tooltip_stop_gif_title, "Stop and create animation", "중지 후 애니메이션 만들기") \
     X(tooltip_stop_gif_body, \
-        "Stop recording, keep the safe MKV source, and create a palette-optimized GIF in the background.", \
-        "녹화를 멈추고 안전 MKV 소스를 유지한 뒤, 팔레트 최적화 GIF를 백그라운드에서 만듭니다.") \
+        "Stop recording, keep the safe MKV source, and create the selected animation format in the background.", \
+        "녹화를 멈추고 안전 MKV 소스를 유지한 뒤 선택한 애니메이션 형식을 백그라운드에서 만듭니다.") \
     X(tab_capture, "Capture", "캡처") \
     X(tab_video, "Video", "비디오") \
-    X(tab_gif, "GIF", "GIF") \
+    X(tab_gif, "Animation", "애니메이션") \
     X(tab_settings, "Settings", "설정") \
     X(capture_step_target, "1. Choose what to capture", "1. 캡처할 대상을 고르세요") \
     X(target_window, "Window", "창") \
@@ -124,7 +124,7 @@ enum class Language { English, Korean };
     X(tooltip_delete_preset_body, \
         "Removes the selected preset. Captured PNG, video, and GIF files are not deleted.", \
         "선택한 프리셋만 지웁니다. 이미 만든 PNG, 비디오, GIF 파일은 삭제되지 않습니다.") \
-    X(capture_step_screenshot, "2. Take a screenshot", "2. 스크린샷을 찍으세요") \
+    X(capture_step_screenshot, "Take a screenshot", "스크린샷 찍기") \
     X(screenshot_intro, "Capture one still image from the selected target.", "선택한 대상에서 정지 이미지를 한 장 캡처합니다.") \
     X(shortcut_result, "Screenshot shortcut result", "스크린샷 단축키 결과") \
     X(clipboard_only, "Clipboard only", "클립보드만") \
@@ -294,13 +294,13 @@ enum class Language { English, Korean };
     X(restore_gif_defaults, "Restore Default", "기본값 복원") \
     X(tooltip_restore_gif_title, "Reset GIF settings", "GIF 설정 초기화") \
     X(tooltip_restore_gif_body, "Restore 12 fps, 720p, and 256 colors.", "12fps, 720p, 256색으로 되돌립니다.") \
-    X(start_gif, "Start GIF recording", "GIF 녹화 시작") \
+    X(start_gif, "Start animation recording", "애니메이션 녹화 시작") \
     X(tooltip_start_gif_title, "Record a silent GIF", "소리 없는 GIF 녹화") \
     X(tooltip_start_gif_body, \
         "Records without audio, then creates an optimized GIF. Recording stops at 30 seconds or the pixel budget. The source MKV is kept if conversion fails.", \
         "오디오 없이 녹화한 뒤 최적화된 GIF를 만듭니다. 30초 또는 픽셀 예산에서 멈춥니다. 변환이 실패하면 소스 MKV를 남깁니다.") \
-    X(creating_gif, "Creating GIF...", "GIF 만드는 중...") \
-    X(cancel_gif, "Cancel GIF conversion", "GIF 변환 취소") \
+    X(creating_gif, "Creating animation...", "애니메이션 만드는 중...") \
+    X(cancel_gif, "Cancel conversion", "변환 취소") \
     X(cancelling, "Cancelling...", "취소 중...") \
     X(settings_language, "Language", "언어") \
     X(settings_output, "Output folder", "출력 폴더") \
@@ -329,7 +329,7 @@ enum class Language { English, Korean };
         "단축키 지정을 누른 다음 원하는 키 조합을 누르세요. Ctrl, Alt, Shift 중 하나가 필요합니다.") \
     X(hotkey_capture, "Capture selected target", "선택 대상 캡처") \
     X(hotkey_video, "Start / stop video", "비디오 시작/중지") \
-    X(hotkey_gif, "Start / stop GIF", "GIF 시작/중지") \
+    X(hotkey_gif, "Start / stop animation", "애니메이션 시작/중지") \
     X(hotkey_quick, "Quick Capture", "빠른 캡처") \
     X(set_shortcut, "Set shortcut", "단축키 지정") \
     X(listening, "Listening...", "입력 대기...") \

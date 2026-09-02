@@ -4,10 +4,10 @@
 
 OpenCapture is a native screen capture application for Windows 10 and 11. Its goal is a GPU-first recording path that keeps captured frames as D3D11 textures through processing and hardware encoding, avoiding a full-frame CPU memory round trip for every frame.
 
-The project is an actively developed technical prototype. It can capture a window, monitor, or region with Windows Graphics Capture, crop and scale on D3D11, and produce H.264, HEVC, or AV1 video with AAC in MKV/MP4, palette-optimized GIFs, or PNG/clipboard still captures.
+The project is an actively developed technical prototype. It can capture a window, monitor, or region with Windows Graphics Capture, crop and scale on D3D11, and produce H.264, HEVC, or AV1 video with AAC in MKV/MP4, GIF/Animated WebP/Animated AVIF, or PNG/WebP/JPEG/AVIF/clipboard still captures.
 
-The latest technical preview is [OpenCapture v0.2.7](https://github.com/CharlieYang0040/OpenCapture/releases/tag/v0.2.7).
-See the [v0.2.7 release notes](docs/releases/v0.2.7.md) for its exact scope and validation boundary.
+The latest technical preview is [OpenCapture v0.2.8](https://github.com/CharlieYang0040/OpenCapture/releases/tag/v0.2.8).
+See the [v0.2.8 release notes](docs/releases/v0.2.8.md) for its exact scope and validation boundary.
 
 ## Goals
 
@@ -39,7 +39,7 @@ Implemented:
 - A four-frame bounded video-encoder worker and preset-based predicted GPU-pressure guidance
 - Startup D3D11 encoder-open validation with active-GPU hardware priority for Auto selection
 - Recording controls with the active encoder, output size, and target bitrate
-- PNG output, clipboard-only capture, and combined save-and-copy
+- Purpose-based PNG lossless, WebP document, WebP balanced, JPEG compatible, and AVIF smallest screenshot presets
 - Diskless Windows clipboard transfer through `CF_DIBV5`
 - Event-driven WASAPI loopback/microphone capture foundation and probe
 - 48 kHz stereo mixing, AAC encoding, and synchronized MKV A/V muxing
@@ -68,7 +68,7 @@ Implemented:
 - Result-oriented tooltips for primary actions and performance/size controls
 - Adaptive UI that follows 100-200% monitor DPI with a persistent 75-200% user adjustment
 - Configurable shortcut output: clipboard, PNG file, or both
-- `Ctrl+Shift+F8` Quick Capture without changing the persistent region or presets
+- `Ctrl+Shift+F8` Quick Capture that selects a temporary region, then offers Screenshot, Video, or Animation without changing persistent targets
 - Automatic main-window hiding during region selection and Capture/Video/GIF/Settings tabs
 - Opt-in notification-area background operation with configurable close behavior
 - Notification-area actions for opening the app, Quick Capture, stopping a recording, and fully exiting
@@ -114,13 +114,13 @@ OpenCapture currently requires no credentials. Do not commit credentials or mach
 
 ## Install a release build
 
-Download `OpenCapture-0.2.7-windows-x64.zip` and `SHA256SUMS.txt` from GitHub Releases,
+Download `OpenCapture-0.2.8-windows-x64.zip` and `SHA256SUMS.txt` from GitHub Releases,
 verify the SHA-256, and extract the entire ZIP into one folder. Keep the DLLs and `licenses`
 directory beside `OpenCapture.exe`. This technical preview is not yet Authenticode-signed and
 may trigger SmartScreen or corporate security controls.
 Corresponding FFmpeg source references, the exact vcpkg port and patches, and the linked build
 configuration are included in the release ZIP and the separate
-`OpenCapture-0.2.7-ffmpeg-build-materials.zip` asset.
+`OpenCapture-0.2.8-ffmpeg-build-materials.zip` asset.
 
 ## Quick start on a new PC
 
@@ -150,7 +150,7 @@ Use these options to build Release or only prepare the tooling:
 After a successful Release build, reproduce the verified distribution ZIP with:
 
 ```powershell
-.\scripts\package_release.ps1 -Version 0.2.7
+.\scripts\package_release.ps1 -Version 0.2.8
 ```
 
 ### Build flow

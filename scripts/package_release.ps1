@@ -44,10 +44,16 @@ $requiredBuildFiles = @(
     "avfilter-11.dll",
     "avformat-62.dll",
     "avutil-60.dll",
+    "aom.dll",
+    "fastfeat.dll",
+    "libsharpyuv.dll",
+    "libwebp.dll",
+    "libwebpmux.dll",
     "libvpl.dll",
     "openh264-7.dll",
     "swresample-6.dll",
-    "swscale-9.dll"
+    "swscale-9.dll",
+    "SvtAv1Enc.dll"
 )
 foreach ($name in $requiredBuildFiles) {
     if (-not (Test-Path -LiteralPath (Join-Path $releaseBuild $name))) {
@@ -73,7 +79,7 @@ foreach ($name in @("LICENSE", "README.md", "README.en.md",
 
 $vcpkgRoot = Join-Path $releaseBuild "vcpkg_installed"
 $vcpkgShare = Join-Path $vcpkgRoot "x64-windows\share"
-foreach ($package in @("amd-amf", "ffmpeg", "ffnvcodec", "imgui", "libvpl", "openh264")) {
+foreach ($package in @("amd-amf", "aom", "fastfeat", "ffmpeg", "ffnvcodec", "imgui", "libvpl", "libwebp", "openh264", "svt-av1")) {
     $share = Join-Path $vcpkgShare $package
     Copy-Item -LiteralPath (Join-Path $share "copyright") -Destination (
         Join-Path $licenseDirectory "$package-copyright.txt")

@@ -14,6 +14,9 @@ enum class VideoCodecPreference { Auto, H264, Hevc, Av1 };
 enum class VideoResolutionLimit { Source, Height1080, Height720 };
 enum class EncoderEfficiencyMode { Realtime, Balanced, Efficient, Quality };
 enum class RecordingGpuPressure { Low, Moderate, High, VeryHigh };
+enum class AnimationFormat { Gif = 0, WebP = 1, Avif = 2 };
+enum class AnimationProfile { Share = 0, Balanced = 1, Smooth = 2, Quality = 3,
+                              Compatibility = 4, Smallest = 5, Custom = 6 };
 
 constexpr std::array kGifFpsChoices{6, 10, 12, 15, 20, 30};
 constexpr std::array kGifHeightChoices{360, 480, 720, 1080};
@@ -29,6 +32,10 @@ struct RecordingPreferences {
     int gifFramesPerSecond{12};
     int gifHeight{720};
     int gifColors{256};
+    AnimationFormat animationFormat{AnimationFormat::WebP};
+    AnimationProfile animationProfile{AnimationProfile::Balanced};
+    int animationQuality{82};
+    int avifCrf{34};
     RecordingProfile profile{RecordingProfile::Compatibility};
     VideoCodecPreference codec{VideoCodecPreference::H264};
     VideoResolutionLimit resolution{VideoResolutionLimit::Height1080};
@@ -51,6 +58,12 @@ struct RecordingPreferences {
 [[nodiscard]] std::string SerializeRecordingPreferences(const RecordingPreferences& preferences);
 [[nodiscard]] RecordingPreferences ApplyRecordingProfile(RecordingPreferences preferences,
                                                           RecordingProfile profile) noexcept;
+[[nodiscard]] RecordingPreferences ApplyAnimationProfile(RecordingPreferences preferences,
+                                                          AnimationProfile profile) noexcept;
+struct AnimationSizeEstimate { std::uint64_t minimumBytes{}; std::uint64_t maximumBytes{}; };
+[[nodiscard]] AnimationSizeEstimate EstimateAnimationSize(AnimationFormat format, int width, int height,
+                                                           int framesPerSecond, double seconds,
+                                                           int quality, int colors, int avifCrf) noexcept;
 [[nodiscard]] int ResolutionHeightLimit(VideoResolutionLimit resolution) noexcept;
 [[nodiscard]] std::int64_t RecommendedVideoBitRate(const RecordingPreferences& preferences,
                                                    int outputWidth, int outputHeight,

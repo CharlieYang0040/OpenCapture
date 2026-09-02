@@ -142,12 +142,21 @@ struct MainPanelState {
     bool encoderSelectionPending{};
     bool screenshotDestinationInitialized{};
     int screenshotDestination{};
+    bool screenshotProfileInitialized{};
+    int screenshotProfile{static_cast<int>(ScreenshotProfile::WebpBalanced)};
     bool traySettingsInitialized{};
     bool closeToTray{};
-    bool focusCaptureTab{};
+    bool openTargetPicker{};
+    bool openSaveRegion{};
+    bool openRenameRegion{};
+    bool quickCapturePopupWasOpen{};
     int gifFpsIndex{2};
     int gifHeightIndex{2};
     int gifColorIndex{3};
+    int animationFormat{static_cast<int>(AnimationFormat::WebP)};
+    int animationProfile{static_cast<int>(AnimationProfile::Balanced)};
+    int animationQuality{82};
+    int avifCrf{34};
 };
 
 MainPanelState& PanelState() {
@@ -176,6 +185,10 @@ void ApplyRecordingPreferences(MainPanelState& panel, const RecordingPreferences
         panel.gifFpsIndex = GifFpsIndex(preferences.gifFramesPerSecond);
         panel.gifHeightIndex = GifHeightIndex(preferences.gifHeight);
         panel.gifColorIndex = GifColorIndex(preferences.gifColors);
+        panel.animationFormat = static_cast<int>(preferences.animationFormat);
+        panel.animationProfile = static_cast<int>(preferences.animationProfile);
+        panel.animationQuality = preferences.animationQuality;
+        panel.avifCrf = preferences.avifCrf;
     }
 }
 
@@ -186,6 +199,7 @@ void ResetPanelPreferences(MainPanelState& panel) {
     panel.borderOpacity = 85;
     panel.outsideDimmingPercent = 30;
     panel.screenshotDestination = 0;
+    panel.screenshotProfile = static_cast<int>(ScreenshotProfile::WebpBalanced);
     panel.closeToTray = false;
     panel.selectedEncoder = 0;
     ApplyRecordingPreferences(panel, DefaultRecordingPreferences(), true, true);
@@ -235,6 +249,10 @@ void CopyRecordingCommand(MainPanelCommand& command, const MainPanelState& panel
         std::clamp(panel.gifHeightIndex, 0, static_cast<int>(kGifHeightChoices.size()) - 1))];
     command.gifColors = kGifColorChoices[static_cast<std::size_t>(
         std::clamp(panel.gifColorIndex, 0, static_cast<int>(kGifColorChoices.size()) - 1))];
+    command.animationFormat = static_cast<AnimationFormat>(panel.animationFormat);
+    command.animationProfile = static_cast<AnimationProfile>(panel.animationProfile);
+    command.animationQuality = panel.animationQuality;
+    command.avifCrf = panel.avifCrf;
 }
 
 ImVec4 StatusColor(const RecordingUiState& recording) {
@@ -274,55 +292,83 @@ void DrawLanguageToggle(MainPanelCommand& command) {
     Explain(Msg::tooltip_language_title, Msg::tooltip_language_body);
 }
 
-void DrawHeader(MainPanelCommand& command, const RecordingUiState& recording,
-                std::string_view outputDirectory, CaptureTargetPicker& picker) {
+void DrawHeader(const RecordingUiState& recording) {
     ImGui::TextUnformatted(Tr(Msg::app_name));
-    ImGui::SameLine();
-    DrawLanguageToggle(command);
     ImGui::SameLine();
     ImGui::TextColored(StatusColor(recording), "%s", StatusLabel(recording));
     if (recording.active) {
         ImGui::SameLine();
         ImGui::TextDisabled("%.1f s", recording.elapsedSeconds);
-        ImGui::SameLine();
-        if (ImGui::Button(recording.paused ? Tr(Msg::resume) : Tr(Msg::pause))) {
-            if (recording.paused) command.resumeRecording = true;
-            else command.pauseRecording = true;
-        }
-        Explain(recording.paused ? Msg::tooltip_resume_title : Msg::tooltip_pause_title,
-                recording.paused ? Msg::tooltip_resume_body : Msg::tooltip_pause_body);
-        ImGui::SameLine();
-        if (ImGui::Button(recording.gif ? Tr(Msg::stop_gif) : Tr(Msg::stop_video))) {
-            command.stopRecording = true;
-        }
-        Explain(recording.gif ? Msg::tooltip_stop_gif_title : Msg::tooltip_stop_video_title,
-                recording.gif ? Msg::tooltip_stop_gif_body : Msg::tooltip_stop_video_body);
     }
+}
 
-    ImGui::Spacing();
-    BeginCard("header-target");
+void DrawSourceBar(MainPanelState& panel, MainPanelCommand& command,
+                   const RecordingUiState& recording, std::string_view outputDirectory,
+                   std::string_view targetOverlayStatus, CaptureTargetPicker& picker) {
+    BeginCard("global-source");
     ImGui::Text("%s", Tr(Msg::header_target));
     ImGui::SameLine();
     ImGui::TextWrapped("%s", picker.SelectedLabel().c_str());
+    if (recording.active) ImGui::BeginDisabled();
     if (ImGui::Button(Tr(Msg::header_change_target), ImVec2(180.0F, 0.0F))) {
-        auto& panel = PanelState();
-        panel.focusCaptureTab = true;
-        panel.activeTab = 0;
         panel.targetType = static_cast<int>(picker.Selected().type);
-        if (picker.Selected().type == CaptureTargetType::Region) {
-            command.selectRegion = true;
-        } else {
-            picker.Refresh();
-            ImGui::OpenPopup(Tr(Msg::popup_capture_target));
-        }
+        picker.Refresh();
+        panel.openTargetPicker = true;
     }
+    if (recording.active) ImGui::EndDisabled();
     Explain(Msg::tooltip_change_target_title, Msg::tooltip_change_target_body);
     ImGui::SameLine();
-    if (ImGui::Button(Tr(Msg::header_quick_capture), ImVec2(160.0F, 0.0F))) command.quickCapture = true;
+    if (recording.active) ImGui::BeginDisabled();
+    if (ImGui::Button(Tr(Msg::header_quick_capture), ImVec2(160.0F, 0.0F))) {
+        command.quickCapture = true;
+    }
+    if (recording.active) ImGui::EndDisabled();
     Explain(Msg::tooltip_quick_capture_title, Msg::tooltip_quick_capture_body);
     ImGui::TextDisabled("%s: %.*s", Tr(Msg::header_output),
                         static_cast<int>(outputDirectory.size()), outputDirectory.data());
+    ImGui::SameLine();
+    const char* openFolder = CurrentLanguage() == Language::Korean
+        ? "출력 폴더 열기###OpenOutputFolder" : "Open output folder###OpenOutputFolder";
+    if (ImGui::SmallButton(openFolder)) command.openOutputDirectory = true;
+    if (!targetOverlayStatus.empty()) {
+        ImGui::TextColored(ImVec4(1.0F, 0.75F, 0.25F, 1.0F), "%.*s",
+                           static_cast<int>(targetOverlayStatus.size()), targetOverlayStatus.data());
+    }
     EndCard();
+}
+
+void DrawQuickCapturePopup(MainPanelCommand& command, MainPanelState& panel,
+                           const QuickCaptureUiState& quickCapture) {
+    const std::string popup = std::string(CurrentLanguage() == Language::Korean
+        ? "빠른 캡처" : "Quick Capture") + "###QuickCaptureAction";
+    if (quickCapture.actionPending && !ImGui::IsPopupOpen(popup.c_str())) {
+        ImGui::OpenPopup(popup.c_str());
+        panel.quickCapturePopupWasOpen = true;
+    }
+    if (!quickCapture.actionPending) panel.quickCapturePopupWasOpen = false;
+    if (!ImGui::BeginPopupModal(popup.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+    ImGui::TextUnformatted(CurrentLanguage() == Language::Korean
+        ? "선택한 영역으로 무엇을 만들까요?" : "Choose what to create from the selected region.");
+    if (ImGui::Button(CurrentLanguage() == Language::Korean ? "스크린샷" : "Screenshot",
+                      ImVec2(180.0F, 42.0F))) {
+        command.quickCaptureScreenshot = true;
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button(Tr(Msg::tab_video), ImVec2(180.0F, 42.0F))) {
+        command.quickCaptureVideo = true;
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button(Tr(Msg::tab_gif), ImVec2(180.0F, 42.0F))) {
+        command.quickCaptureAnimation = true;
+        ImGui::CloseCurrentPopup();
+    }
+    if (ImGui::Button(Tr(Msg::cancel), ImVec2(180.0F, 0.0F))) {
+        command.cancelQuickCapture = true;
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
 }
 
 void DrawStatusBar(const RecordingUiState& recording) {
@@ -371,8 +417,25 @@ void DrawStatusBar(const RecordingUiState& recording) {
     EndCard();
 }
 
-void DrawTargetPopups(MainPanelState& panel, CaptureTargetPicker& picker, ID3D11Device* device) {
-    if (ImGui::BeginPopupModal(Tr(Msg::popup_rename_region), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+void DrawTargetPopups(MainPanelCommand& command, MainPanelState& panel,
+                      CaptureTargetPicker& picker, ID3D11Device* device) {
+    const std::string targetPopup = std::string(Tr(Msg::popup_capture_target)) + "###CaptureTargetPicker";
+    const std::string savePopup = std::string(Tr(Msg::popup_save_region)) + "###SaveRegionDialog";
+    const std::string renamePopup = std::string(Tr(Msg::popup_rename_region)) + "###RenameRegionDialog";
+    if (panel.openTargetPicker) {
+        ImGui::OpenPopup(targetPopup.c_str());
+        panel.openTargetPicker = false;
+    }
+    if (panel.openSaveRegion) {
+        ImGui::OpenPopup(savePopup.c_str());
+        panel.openSaveRegion = false;
+    }
+    if (panel.openRenameRegion) {
+        ImGui::OpenPopup(renamePopup.c_str());
+        panel.openRenameRegion = false;
+    }
+
+    if (ImGui::BeginPopupModal(renamePopup.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::InputText(Tr(Msg::new_name), panel.renameName.data(), panel.renameName.size());
         if (ImGui::Button(Tr(Msg::rename)) && panel.selectedPreset >= 0 &&
             picker.RenameRegionPreset(static_cast<std::size_t>(panel.selectedPreset), panel.renameName.data())) {
@@ -383,7 +446,7 @@ void DrawTargetPopups(MainPanelState& panel, CaptureTargetPicker& picker, ID3D11
         ImGui::EndPopup();
     }
 
-    if (ImGui::BeginPopupModal(Tr(Msg::popup_save_region), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (ImGui::BeginPopupModal(savePopup.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::InputText(Tr(Msg::name), panel.presetName.data(), panel.presetName.size());
         ImGui::RadioButton(Tr(Msg::desktop_coordinates), &panel.presetAnchor,
                            static_cast<int>(RegionAnchorType::VirtualDesktop));
@@ -420,7 +483,23 @@ void DrawTargetPopups(MainPanelState& panel, CaptureTargetPicker& picker, ID3D11
         ImGui::EndPopup();
     }
 
-    if (ImGui::BeginPopupModal(Tr(Msg::popup_capture_target), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (ImGui::BeginPopupModal(targetPopup.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::RadioButton(Tr(Msg::target_window), &panel.targetType,
+                           static_cast<int>(CaptureTargetType::Window));
+        Explain(Msg::tooltip_window_title, Msg::tooltip_window_body);
+        ImGui::SameLine();
+        ImGui::RadioButton(Tr(Msg::target_region), &panel.targetType,
+                           static_cast<int>(CaptureTargetType::Region));
+        Explain(Msg::tooltip_region_title, Msg::tooltip_region_body);
+        ImGui::SameLine();
+        ImGui::RadioButton(Tr(Msg::target_monitor), &panel.targetType,
+                           static_cast<int>(CaptureTargetType::Monitor));
+        Explain(Msg::tooltip_monitor_title, Msg::tooltip_monitor_body);
+        ImGui::SameLine();
+        if (ImGui::SmallButton(Tr(Msg::refresh))) picker.Refresh();
+        Explain(Msg::tooltip_refresh_title, Msg::tooltip_refresh_body);
+        ImGui::Separator();
+
         if (panel.targetType == static_cast<int>(CaptureTargetType::Window)) {
             ImGui::TextUnformatted(Tr(Msg::choose_visible_window));
             ImGui::BeginChild("windows", ImVec2(560.0F, 300.0F), ImGuiChildFlags_Borders);
@@ -442,7 +521,7 @@ void DrawTargetPopups(MainPanelState& panel, CaptureTargetPicker& picker, ID3D11
                 ImGui::PopID();
             }
             ImGui::EndChild();
-        } else {
+        } else if (panel.targetType == static_cast<int>(CaptureTargetType::Monitor)) {
             ImGui::TextUnformatted(Tr(Msg::choose_a_monitor));
             const auto& monitors = picker.Monitors();
             for (std::size_t index = 0; index < monitors.size(); ++index) {
@@ -457,112 +536,90 @@ void DrawTargetPopups(MainPanelState& panel, CaptureTargetPicker& picker, ID3D11
                     ImGui::CloseCurrentPopup();
                 }
             }
+        } else {
+            if (ImGui::Button(Tr(Msg::select_capture_target), ImVec2(220.0F, 36.0F))) {
+                command.selectRegion = true;
+                ImGui::CloseCurrentPopup();
+            }
+            Explain(Msg::tooltip_select_target_title, Msg::tooltip_select_target_body);
+
+            ImGui::SeparatorText(Tr(Msg::region_presets));
+            const auto& presets = picker.Presets();
+            if (panel.selectedPreset >= static_cast<int>(presets.size())) panel.selectedPreset = -1;
+            const char* preview = panel.selectedPreset >= 0
+                ? presets[static_cast<std::size_t>(panel.selectedPreset)].name.c_str()
+                : Tr(Msg::choose_saved_region);
+            ImGui::SetNextItemWidth(300.0F);
+            if (ImGui::BeginCombo("##RegionPreset", preview)) {
+                for (std::size_t index = 0; index < presets.size(); ++index) {
+                    const bool selected = panel.selectedPreset == static_cast<int>(index);
+                    const std::string label = presets[index].name + "  [" +
+                        std::string(presets[index].anchorType == RegionAnchorType::WindowClient
+                                        ? Tr(Msg::preset_window_tag)
+                                        : Tr(Msg::preset_desktop_tag)) +
+                        "]##" + presets[index].id;
+                    if (ImGui::Selectable(label.c_str(), selected)) panel.selectedPreset = static_cast<int>(index);
+                    if (selected) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button(Tr(Msg::apply_preset)) && panel.selectedPreset >= 0) {
+                if (picker.ApplyRegionPreset(static_cast<std::size_t>(panel.selectedPreset))) {
+                    panel.targetType = static_cast<int>(CaptureTargetType::Region);
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+            Explain(Msg::tooltip_apply_preset_title, Msg::tooltip_apply_preset_body, true);
+
+            if (ImGui::Button(Tr(Msg::save_current))) {
+                picker.Refresh();
+                panel.openSaveRegion = true;
+                ImGui::CloseCurrentPopup();
+            }
+            Explain(Msg::tooltip_save_preset_title, Msg::tooltip_save_preset_body);
+            ImGui::SameLine();
+            if (ImGui::Button(Tr(Msg::delete_preset)) && panel.selectedPreset >= 0) {
+                if (picker.DeleteRegionPreset(static_cast<std::size_t>(panel.selectedPreset))) {
+                    panel.selectedPreset = -1;
+                }
+            }
+            Explain(Msg::tooltip_delete_preset_title, Msg::tooltip_delete_preset_body, true);
+            if (panel.selectedPreset >= 0) {
+                ImGui::SameLine();
+                if (ImGui::SmallButton(Tr(Msg::rename))) {
+                    std::snprintf(panel.renameName.data(), panel.renameName.size(), "%s",
+                                  presets[static_cast<std::size_t>(panel.selectedPreset)].name.c_str());
+                    panel.openRenameRegion = true;
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::SameLine();
+                if (ImGui::SmallButton(Tr(Msg::duplicate)) &&
+                    picker.DuplicateRegionPreset(static_cast<std::size_t>(panel.selectedPreset))) {
+                    ++panel.selectedPreset;
+                }
+                ImGui::SameLine();
+                if (ImGui::ArrowButton("preset-up", ImGuiDir_Up) &&
+                    picker.MoveRegionPreset(static_cast<std::size_t>(panel.selectedPreset), -1)) {
+                    --panel.selectedPreset;
+                }
+                ImGui::SameLine();
+                if (ImGui::ArrowButton("preset-down", ImGuiDir_Down) &&
+                    picker.MoveRegionPreset(static_cast<std::size_t>(panel.selectedPreset), 1)) {
+                    ++panel.selectedPreset;
+                }
+            }
+            if (!picker.LastError().empty()) {
+                ImGui::TextColored(ImVec4(1.0F, 0.4F, 0.35F, 1.0F), "%s", picker.LastError().c_str());
+            }
         }
         if (ImGui::Button(Tr(Msg::cancel))) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
 }
 
-void DrawCaptureTab(MainPanelCommand& command, MainPanelState& panel, CaptureTargetPicker& picker,
-                    const ScreenshotUiState& screenshot, std::string_view screenshotStatus,
-                    std::string_view targetOverlayStatus) {
-    if (panel.targetType < 0) panel.targetType = static_cast<int>(picker.Selected().type);
-    BeginCard("capture-target");
-    ImGui::TextUnformatted(Tr(Msg::capture_step_target));
-    ImGui::RadioButton(Tr(Msg::target_window), &panel.targetType, 0);
-    Explain(Msg::tooltip_window_title, Msg::tooltip_window_body);
-    ImGui::SameLine();
-    ImGui::RadioButton(Tr(Msg::target_region), &panel.targetType, 1);
-    Explain(Msg::tooltip_region_title, Msg::tooltip_region_body);
-    ImGui::SameLine();
-    ImGui::RadioButton(Tr(Msg::target_monitor), &panel.targetType, 2);
-    Explain(Msg::tooltip_monitor_title, Msg::tooltip_monitor_body);
-    if (ImGui::Button(Tr(Msg::select_capture_target), ImVec2(220.0F, 36.0F))) {
-        if (panel.targetType == static_cast<int>(CaptureTargetType::Region)) command.selectRegion = true;
-        else {
-            picker.Refresh();
-            ImGui::OpenPopup(Tr(Msg::popup_capture_target));
-        }
-    }
-    Explain(Msg::tooltip_select_target_title, Msg::tooltip_select_target_body);
-    ImGui::SameLine();
-    if (ImGui::SmallButton(Tr(Msg::refresh))) picker.Refresh();
-    Explain(Msg::tooltip_refresh_title, Msg::tooltip_refresh_body);
-    ImGui::TextWrapped("%s: %s", Tr(Msg::selected_prefix), picker.SelectedLabel().c_str());
-    if (!targetOverlayStatus.empty()) {
-        ImGui::TextColored(ImVec4(1.0F, 0.75F, 0.25F, 1.0F), "%.*s",
-                           static_cast<int>(targetOverlayStatus.size()), targetOverlayStatus.data());
-    }
-    EndCard();
-
-    if (panel.targetType == static_cast<int>(CaptureTargetType::Region) ||
-        picker.Selected().type == CaptureTargetType::Region) {
-        BeginCard("capture-presets");
-        ImGui::TextUnformatted(Tr(Msg::region_presets));
-        const auto& presets = picker.Presets();
-        const char* preview = panel.selectedPreset >= 0 && panel.selectedPreset < static_cast<int>(presets.size())
-            ? presets[static_cast<std::size_t>(panel.selectedPreset)].name.c_str()
-            : Tr(Msg::choose_saved_region);
-        ImGui::SetNextItemWidth(260.0F);
-        if (ImGui::BeginCombo("##RegionPreset", preview)) {
-            for (std::size_t index = 0; index < presets.size(); ++index) {
-                const bool selected = panel.selectedPreset == static_cast<int>(index);
-                const std::string label = presets[index].name + "  [" +
-                    std::string(presets[index].anchorType == RegionAnchorType::WindowClient
-                                    ? Tr(Msg::preset_window_tag)
-                                    : Tr(Msg::preset_desktop_tag)) +
-                    "]##" + presets[index].id;
-                if (ImGui::Selectable(label.c_str(), selected)) panel.selectedPreset = static_cast<int>(index);
-                if (selected) ImGui::SetItemDefaultFocus();
-            }
-            ImGui::EndCombo();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button(Tr(Msg::apply_preset)) && panel.selectedPreset >= 0) {
-            if (picker.ApplyRegionPreset(static_cast<std::size_t>(panel.selectedPreset))) {
-                panel.targetType = static_cast<int>(CaptureTargetType::Region);
-            }
-        }
-        Explain(Msg::tooltip_apply_preset_title, Msg::tooltip_apply_preset_body, true);
-        ImGui::SameLine();
-        if (ImGui::Button(Tr(Msg::save_current))) {
-            picker.Refresh();
-            ImGui::OpenPopup(Tr(Msg::popup_save_region));
-        }
-        Explain(Msg::tooltip_save_preset_title, Msg::tooltip_save_preset_body);
-        ImGui::SameLine();
-        if (ImGui::Button(Tr(Msg::delete_preset)) && panel.selectedPreset >= 0) {
-            if (picker.DeleteRegionPreset(static_cast<std::size_t>(panel.selectedPreset))) panel.selectedPreset = -1;
-        }
-        Explain(Msg::tooltip_delete_preset_title, Msg::tooltip_delete_preset_body, true);
-        if (panel.selectedPreset >= 0) {
-            if (ImGui::SmallButton(Tr(Msg::rename))) {
-                std::snprintf(panel.renameName.data(), panel.renameName.size(), "%s",
-                              presets[static_cast<std::size_t>(panel.selectedPreset)].name.c_str());
-                ImGui::OpenPopup(Tr(Msg::popup_rename_region));
-            }
-            ImGui::SameLine();
-            if (ImGui::SmallButton(Tr(Msg::duplicate)) &&
-                picker.DuplicateRegionPreset(static_cast<std::size_t>(panel.selectedPreset))) {
-                ++panel.selectedPreset;
-            }
-            ImGui::SameLine();
-            if (ImGui::ArrowButton("preset-up", ImGuiDir_Up) &&
-                picker.MoveRegionPreset(static_cast<std::size_t>(panel.selectedPreset), -1)) {
-                --panel.selectedPreset;
-            }
-            ImGui::SameLine();
-            if (ImGui::ArrowButton("preset-down", ImGuiDir_Down) &&
-                picker.MoveRegionPreset(static_cast<std::size_t>(panel.selectedPreset), 1)) {
-                ++panel.selectedPreset;
-            }
-        }
-        if (!picker.LastError().empty()) {
-            ImGui::TextColored(ImVec4(1.0F, 0.4F, 0.35F, 1.0F), "%s", picker.LastError().c_str());
-        }
-        EndCard();
-    }
-
+void DrawCaptureTab(MainPanelCommand& command, MainPanelState& panel,
+                    const ScreenshotUiState& screenshot, std::string_view screenshotStatus) {
     BeginCard("capture-screenshot");
     ImGui::TextUnformatted(Tr(Msg::capture_step_screenshot));
     ImGui::TextWrapped("%s", Tr(Msg::screenshot_intro));
@@ -572,15 +629,55 @@ void DrawCaptureTab(MainPanelCommand& command, MainPanelState& panel, CaptureTar
             screenshot.shortcutDestination == ScreenshotDestination::FileAndClipboard ? 2 : 0;
         panel.screenshotDestinationInitialized = true;
     }
+    if (!panel.screenshotProfileInitialized) {
+        panel.screenshotProfile = static_cast<int>(screenshot.profile);
+        panel.screenshotProfileInitialized = true;
+    }
+    ImGui::SeparatorText(CurrentLanguage() == Language::Korean ? "저장 프리셋" : "Save preset");
+    constexpr std::array<const char*, 5> english{
+        "PNG lossless", "WebP document", "WebP balanced", "JPEG compatible", "AVIF smallest"};
+    constexpr std::array<const char*, 5> korean{
+        "PNG 무손실", "WebP 문서", "WebP 균형", "JPEG 호환", "AVIF 최소 용량"};
+    constexpr std::array<const char*, 5> englishDetails{
+        "Exact pixels and transparency · largest", "Near-lossless text and UI · smaller than PNG",
+        "Good general quality · recommended", "Works almost everywhere · no transparency",
+        "Smallest file · slower to save"};
+    constexpr std::array<const char*, 5> koreanDetails{
+        "픽셀과 투명도 보존 · 가장 큰 용량", "글자와 UI를 선명하게 · PNG보다 작음",
+        "일반 용도 화질과 용량 균형 · 권장", "거의 모든 곳에서 호환 · 투명도 없음",
+        "가장 작은 용량 · 저장 속도 느림"};
+    const float available = ImGui::GetContentRegionAvail().x;
+    const int columns = available > 720.0F ? 3 : (available > 460.0F ? 2 : 1);
+    const float width = (available - static_cast<float>(columns - 1) * 8.0F) / columns;
+    for (int index = 0; index < 5; ++index) {
+        if (index > 0 && index % columns != 0) ImGui::SameLine();
+        const bool selected = panel.screenshotProfile == index;
+        if (selected) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16F, 0.38F, 0.72F, 1.0F));
+        ImGui::PushID(index + 600);
+        if (ImGui::Button(CurrentLanguage() == Language::Korean ? korean[index] : english[index],
+                          ImVec2(width, 42.0F))) {
+            panel.screenshotProfile = index;
+            command.screenshotProfile = static_cast<ScreenshotProfile>(index);
+            command.applyScreenshotProfile = true;
+        }
+        ExplainLastItem(CurrentLanguage() == Language::Korean ? korean[index] : english[index],
+                        CurrentLanguage() == Language::Korean ? koreanDetails[index] : englishDetails[index]);
+        ImGui::PopID();
+        if (selected) ImGui::PopStyleColor();
+    }
     ImGui::SetNextItemWidth(240.0F);
     const char* shortcutPreview =
-        panel.screenshotDestination == 1 ? Tr(Msg::save_png_file) :
-        panel.screenshotDestination == 2 ? Tr(Msg::save_png_clipboard) : Tr(Msg::clipboard_only);
+        panel.screenshotDestination == 1 ? (CurrentLanguage() == Language::Korean ? "파일 저장" : "Save file") :
+        panel.screenshotDestination == 2 ? (CurrentLanguage() == Language::Korean ? "파일 저장 + 클립보드" : "Save file + clipboard") :
+                                           Tr(Msg::clipboard_only);
     if (ImGui::BeginCombo(Tr(Msg::shortcut_result), shortcutPreview)) {
-        const std::array options{Msg::clipboard_only, Msg::save_png_file, Msg::save_png_clipboard};
-        for (int index = 0; index < static_cast<int>(options.size()); ++index) {
+        constexpr int optionCount = 3;
+        for (int index = 0; index < optionCount; ++index) {
             const bool selected = panel.screenshotDestination == index;
-            if (ImGui::Selectable(Tr(options[static_cast<std::size_t>(index)]), selected)) {
+            const char* label = index == 0 ? Tr(Msg::clipboard_only) :
+                index == 1 ? (CurrentLanguage() == Language::Korean ? "파일 저장" : "Save file") :
+                             (CurrentLanguage() == Language::Korean ? "파일 저장 + 클립보드" : "Save file + clipboard");
+            if (ImGui::Selectable(label, selected)) {
                 panel.screenshotDestination = index;
                 command.applyScreenshotShortcutDestination = true;
                 command.screenshotShortcutDestination =
@@ -592,16 +689,7 @@ void DrawCaptureTab(MainPanelCommand& command, MainPanelState& panel, CaptureTar
         ImGui::EndCombo();
     }
     Explain(Msg::tooltip_shortcut_result_title, Msg::tooltip_shortcut_result_body);
-    const bool stack = ImGui::GetContentRegionAvail().x < 500.0F;
-    const float width = stack ? -1.0F : 155.0F;
-    if (ImGui::Button(Tr(Msg::copy_to_clipboard), ImVec2(width, 42.0F))) command.copyScreenshot = true;
-    Explain(Msg::tooltip_copy_title, Msg::tooltip_copy_body);
-    if (!stack) ImGui::SameLine();
-    if (ImGui::Button(Tr(Msg::save_png_button), ImVec2(stack ? -1.0F : 140.0F, 42.0F))) command.saveScreenshot = true;
-    Explain(Msg::tooltip_png_title, Msg::tooltip_png_body);
-    if (!stack) ImGui::SameLine();
-    if (ImGui::Button(Tr(Msg::save_png_copy), ImVec2(width, 42.0F))) command.saveAndCopyScreenshot = true;
-    Explain(Msg::tooltip_png_copy_title, Msg::tooltip_png_copy_body);
+    command.screenshotProfile = static_cast<ScreenshotProfile>(panel.screenshotProfile);
     if (!screenshotStatus.empty()) {
         ImGui::TextWrapped("%.*s", static_cast<int>(screenshotStatus.size()), screenshotStatus.data());
     }
@@ -635,8 +723,8 @@ void DrawEncoderCombo(MainPanelCommand& command, MainPanelState& panel,
 }
 
 void DrawVideoTab(MainPanelCommand& command, MainPanelState& panel,
-                  const std::vector<EncoderUiChoice>& encoderChoices, const RecordingUiState& recording,
-                  std::string_view audioStatus, std::string_view remuxStatus, bool mediaBusy) {
+                  const std::vector<EncoderUiChoice>& encoderChoices,
+                  std::string_view audioStatus, std::string_view remuxStatus) {
     const char* encoderPreview = Tr(Msg::encoder_auto);
     if (panel.selectedEncoder > 0) {
         encoderPreview = encoderChoices[static_cast<std::size_t>(panel.selectedEncoder - 1)].displayName.data();
@@ -753,18 +841,6 @@ void DrawVideoTab(MainPanelCommand& command, MainPanelState& panel,
     ImGui::TextColored(pressureColor, "%s", Tr(pressure));
     Explain(Msg::tooltip_pressure_title, Msg::tooltip_pressure_body);
 
-    if (!recording.active) {
-        if (mediaBusy) ImGui::BeginDisabled();
-        if (ImGui::Button(Tr(Msg::start_video), ImVec2(220.0F, 44.0F))) command.startRecording = true;
-        if (mediaBusy) ImGui::EndDisabled();
-        Explain(mediaBusy ? Msg::tooltip_start_video_busy_title : Msg::tooltip_start_video_title,
-                mediaBusy ? Msg::tooltip_start_video_busy_body : Msg::tooltip_start_video_body, mediaBusy);
-    }
-    if (!recording.active && !mediaBusy && recording.canRemux) {
-        ImGui::SameLine();
-        if (ImGui::Button(Tr(Msg::convert_to_mp4), ImVec2(180.0F, 44.0F))) command.remuxLastRecording = true;
-        Explain(Msg::tooltip_remux_title, Msg::tooltip_remux_body);
-    }
     if (!remuxStatus.empty()) {
         ImGui::TextWrapped("%.*s", static_cast<int>(remuxStatus.size()), remuxStatus.data());
     }
@@ -866,35 +942,102 @@ void DrawVideoTab(MainPanelCommand& command, MainPanelState& panel,
 
 void DrawGifTab(MainPanelCommand& command, MainPanelState& panel, const RecordingUiState& recording,
                 std::string_view gifStatus, bool outputBusy, bool mediaBusy) {
+    BeginCard("animation-profiles");
+    ImGui::TextUnformatted(CurrentLanguage() == Language::Korean ? "애니메이션 프리셋" : "Animation presets");
+    constexpr std::array<const char*, 6> english{"Quick share", "Balanced", "Smooth", "High quality",
+                                                 "Maximum compatibility", "Smallest file"};
+    constexpr std::array<const char*, 6> korean{"빠른 공유", "균형", "부드러운 움직임", "고화질",
+                                                "최대 호환", "최소 용량"};
+    const float available = ImGui::GetContentRegionAvail().x;
+    const int columns = available > 650.0F ? 3 : 2;
+    const float width = (available - static_cast<float>(columns - 1) * 8.0F) / columns;
+    for (int index = 0; index < 6; ++index) {
+        if (index > 0 && index % columns != 0) ImGui::SameLine();
+        const bool selected = panel.animationProfile == index;
+        if (selected) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16F, 0.38F, 0.72F, 1.0F));
+        if (ImGui::Button((CurrentLanguage() == Language::Korean ? korean[index] : english[index]),
+                          ImVec2(width, 40.0F))) {
+            RecordingPreferences preferences{};
+            preferences.gifFramesPerSecond = kGifFpsChoices[static_cast<std::size_t>(panel.gifFpsIndex)];
+            preferences.gifHeight = kGifHeightChoices[static_cast<std::size_t>(panel.gifHeightIndex)];
+            preferences.gifColors = kGifColorChoices[static_cast<std::size_t>(panel.gifColorIndex)];
+            preferences.animationFormat = static_cast<AnimationFormat>(panel.animationFormat);
+            preferences.animationQuality = panel.animationQuality;
+            preferences.avifCrf = panel.avifCrf;
+            preferences = ApplyAnimationProfile(preferences, static_cast<AnimationProfile>(index));
+            panel.gifFpsIndex = GifFpsIndex(preferences.gifFramesPerSecond);
+            panel.gifHeightIndex = GifHeightIndex(preferences.gifHeight);
+            panel.gifColorIndex = GifColorIndex(preferences.gifColors);
+            panel.animationFormat = static_cast<int>(preferences.animationFormat);
+            panel.animationProfile = index;
+            panel.animationQuality = preferences.animationQuality;
+            panel.avifCrf = preferences.avifCrf;
+            command.applyRecordingSettings = true;
+        }
+        if (selected) ImGui::PopStyleColor();
+    }
+    EndCard();
+
     BeginCard("gif-controls");
-    ImGui::TextWrapped("%s", Tr(Msg::gif_intro));
+    ImGui::TextWrapped("%s", CurrentLanguage() == Language::Korean
+        ? "해상도와 FPS를 낮추면 용량이 크게 줄어듭니다. WebP는 일반 용도에 권장하고, GIF는 최대 호환, AVIF는 최소 용량에 적합합니다."
+        : "Lower resolution and FPS reduce size substantially. WebP is recommended for general use, GIF for maximum compatibility, and AVIF for the smallest files.");
     if (outputBusy) ImGui::BeginDisabled();
+    constexpr std::array<const char*, 3> formatNamesEnglish{
+        "GIF", "Animated WebP (recommended)", "Animated AVIF (smallest, slow)"};
+    constexpr std::array<const char*, 3> formatNamesKorean{
+        "GIF (최대 호환)", "Animated WebP (권장)", "Animated AVIF (최소 용량·느림)"};
+    const auto& formatNames = CurrentLanguage() == Language::Korean
+        ? formatNamesKorean : formatNamesEnglish;
+    if (ImGui::Combo(CurrentLanguage() == Language::Korean ? "출력 형식" : "Output format",
+                     &panel.animationFormat, formatNames.data(),
+                     static_cast<int>(formatNames.size()))) {
+        panel.animationProfile = static_cast<int>(AnimationProfile::Custom);
+        command.applyRecordingSettings = true;
+    }
     constexpr std::array gifFpsLabels{"6 fps", "10 fps", "12 fps", "15 fps", "20 fps", "30 fps"};
     if (ImGui::Combo(Tr(Msg::gif_fps), &panel.gifFpsIndex, gifFpsLabels.data(),
                      static_cast<int>(gifFpsLabels.size()))) {
+        panel.animationProfile = static_cast<int>(AnimationProfile::Custom);
         command.applyRecordingSettings = true;
     }
     Explain(Msg::tooltip_gif_fps_title, Msg::tooltip_gif_fps_body, outputBusy);
     constexpr std::array gifHeightLabels{"360p", "480p", "720p", "1080p"};
     if (ImGui::Combo(Tr(Msg::gif_resolution), &panel.gifHeightIndex, gifHeightLabels.data(),
                      static_cast<int>(gifHeightLabels.size()))) {
+        panel.animationProfile = static_cast<int>(AnimationProfile::Custom);
         command.applyRecordingSettings = true;
     }
     Explain(Msg::tooltip_gif_res_title, Msg::tooltip_gif_res_body, outputBusy);
-    const std::array gifColorLabels{Tr(Msg::gif_colors_64), Tr(Msg::gif_colors_128), Tr(Msg::gif_colors_192),
-                                    Tr(Msg::gif_colors_256)};
-    if (ImGui::BeginCombo(Tr(Msg::gif_colors), gifColorLabels[static_cast<std::size_t>(
-            std::clamp(panel.gifColorIndex, 0, 3))])) {
-        for (int index = 0; index < 4; ++index) {
-            if (ImGui::Selectable(gifColorLabels[static_cast<std::size_t>(index)],
-                                  panel.gifColorIndex == index)) {
-                panel.gifColorIndex = index;
-                command.applyRecordingSettings = true;
+    if (panel.animationFormat == static_cast<int>(AnimationFormat::Gif)) {
+        const std::array gifColorLabels{Tr(Msg::gif_colors_64), Tr(Msg::gif_colors_128), Tr(Msg::gif_colors_192),
+                                        Tr(Msg::gif_colors_256)};
+        if (ImGui::BeginCombo(Tr(Msg::gif_colors), gifColorLabels[static_cast<std::size_t>(
+                std::clamp(panel.gifColorIndex, 0, 3))])) {
+            for (int index = 0; index < 4; ++index) {
+                if (ImGui::Selectable(gifColorLabels[static_cast<std::size_t>(index)],
+                                      panel.gifColorIndex == index)) {
+                    panel.gifColorIndex = index;
+                    panel.animationProfile = static_cast<int>(AnimationProfile::Custom);
+                    command.applyRecordingSettings = true;
+                }
             }
+            ImGui::EndCombo();
         }
-        ImGui::EndCombo();
+        Explain(Msg::tooltip_gif_colors_title, Msg::tooltip_gif_colors_body, outputBusy);
+    } else if (panel.animationFormat == static_cast<int>(AnimationFormat::WebP)) {
+        ImGui::SliderInt("WebP quality", &panel.animationQuality, 1, 100);
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+            panel.animationProfile = static_cast<int>(AnimationProfile::Custom);
+            command.applyRecordingSettings = true;
+        }
+    } else {
+        ImGui::SliderInt("AVIF CRF (lower is higher quality)", &panel.avifCrf, 0, 63);
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+            panel.animationProfile = static_cast<int>(AnimationProfile::Custom);
+            command.applyRecordingSettings = true;
+        }
     }
-    Explain(Msg::tooltip_gif_colors_title, Msg::tooltip_gif_colors_body, outputBusy);
     if (outputBusy) ImGui::EndDisabled();
     command.gifFramesPerSecond = kGifFpsChoices[static_cast<std::size_t>(
         std::clamp(panel.gifFpsIndex, 0, static_cast<int>(kGifFpsChoices.size()) - 1))];
@@ -902,6 +1045,26 @@ void DrawGifTab(MainPanelCommand& command, MainPanelState& panel, const Recordin
         std::clamp(panel.gifHeightIndex, 0, static_cast<int>(kGifHeightChoices.size()) - 1))];
     command.gifColors = kGifColorChoices[static_cast<std::size_t>(
         std::clamp(panel.gifColorIndex, 0, static_cast<int>(kGifColorChoices.size()) - 1))];
+    command.animationFormat = static_cast<AnimationFormat>(panel.animationFormat);
+    command.animationProfile = static_cast<AnimationProfile>(panel.animationProfile);
+    command.animationQuality = panel.animationQuality;
+    command.avifCrf = panel.avifCrf;
+    const int estimateWidth = command.gifHeight * 16 / 9;
+    const auto tenSeconds = EstimateAnimationSize(command.animationFormat, estimateWidth, command.gifHeight,
+                                                   command.gifFramesPerSecond, 10.0,
+                                                   command.animationQuality, command.gifColors, command.avifCrf);
+    const double limit = GifDurationLimit(SIZE{estimateWidth, command.gifHeight}, command.gifFramesPerSecond);
+    const auto maximum = EstimateAnimationSize(command.animationFormat, estimateWidth, command.gifHeight,
+                                                command.gifFramesPerSecond, limit,
+                                                command.animationQuality, command.gifColors, command.avifCrf);
+    ImGui::Text(CurrentLanguage() == Language::Korean
+                    ? "예상 10초: %.1f-%.1f MB | 자동 종료 %.0f초: %.1f-%.1f MB"
+                    : "Estimated 10 s: %.1f-%.1f MB | auto-stop %.0f s: %.1f-%.1f MB",
+                tenSeconds.minimumBytes / 1'000'000.0, tenSeconds.maximumBytes / 1'000'000.0, limit,
+                maximum.minimumBytes / 1'000'000.0, maximum.maximumBytes / 1'000'000.0);
+    ImGui::TextDisabled("%s", CurrentLanguage() == Language::Korean
+        ? "움직임과 화면 복잡도에 따라 실제 용량은 크게 달라질 수 있습니다."
+        : "Estimate varies widely with motion and screen detail.");
     if (command.gifHeight >= 1080 || command.gifFramesPerSecond >= 30) {
         ImGui::TextColored(ImVec4(1.0F, 0.75F, 0.25F, 1.0F), "%s", Tr(Msg::gif_warning_large));
     }
@@ -911,22 +1074,105 @@ void DrawGifTab(MainPanelCommand& command, MainPanelState& panel, const Recordin
         command.applyRecordingSettings = true;
     }
     if (!outputBusy) Explain(Msg::tooltip_restore_gif_title, Msg::tooltip_restore_gif_body);
-    if (!outputBusy && ImGui::Button(Tr(Msg::start_gif), ImVec2(220.0F, 44.0F))) command.startGif = true;
-    if (!outputBusy) Explain(Msg::tooltip_start_gif_title, Msg::tooltip_start_gif_body);
     if (mediaBusy) {
         ImGui::ProgressBar(static_cast<float>(std::clamp(recording.mediaProgress, 0.0, 1.0)),
                            ImVec2(-1.0F, 0.0F), Tr(Msg::creating_gif));
-        if (recording.mediaCancelRequested) ImGui::BeginDisabled();
-        if (ImGui::Button(recording.mediaCancelRequested ? Tr(Msg::cancelling) : Tr(Msg::cancel_gif),
-                          ImVec2(220.0F, 36.0F))) {
-            command.cancelMediaJob = true;
-        }
-        if (recording.mediaCancelRequested) ImGui::EndDisabled();
     }
     if (!gifStatus.empty()) {
         ImGui::TextWrapped("%.*s", static_cast<int>(gifStatus.size()), gifStatus.data());
     }
     EndCard();
+}
+
+void DrawSessionCommandBar(MainPanelCommand& command, const MainPanelState& panel,
+                           const RecordingUiState& recording, bool mediaBusy) {
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0F);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0F, 10.0F));
+    ImGui::BeginChild("SessionCommandBar", ImVec2(-1.0F, 64.0F), ImGuiChildFlags_Borders,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+
+    ImGui::TextColored(StatusColor(recording), "%s", StatusLabel(recording));
+    if (recording.active) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("%.1f s", recording.elapsedSeconds);
+    } else {
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", Tr(Msg::footer_ready));
+    }
+
+    float totalWidth = 0.0F;
+    if (recording.active) totalWidth = 290.0F;
+    else if (mediaBusy) totalWidth = 220.0F;
+    else if (panel.activeTab == 1 && recording.canRemux) totalWidth = 408.0F;
+    else if (panel.activeTab <= 2) totalWidth = 220.0F;
+    if (totalWidth > 0.0F) {
+        ImGui::SameLine();
+        const float right = ImGui::GetWindowContentRegionMax().x;
+        ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), right - totalWidth));
+    }
+
+    if (recording.active) {
+        if (ImGui::Button(recording.paused ? Tr(Msg::resume) : Tr(Msg::pause), ImVec2(130.0F, 38.0F))) {
+            if (recording.paused) command.resumeRecording = true;
+            else command.pauseRecording = true;
+        }
+        Explain(recording.paused ? Msg::tooltip_resume_title : Msg::tooltip_pause_title,
+                recording.paused ? Msg::tooltip_resume_body : Msg::tooltip_pause_body);
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.72F, 0.18F, 0.18F, 1.0F));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.86F, 0.24F, 0.24F, 1.0F));
+        if (ImGui::Button(recording.gif ? Tr(Msg::stop_gif) : Tr(Msg::stop_video),
+                          ImVec2(150.0F, 38.0F))) {
+            command.stopRecording = true;
+        }
+        ImGui::PopStyleColor(2);
+        Explain(recording.gif ? Msg::tooltip_stop_gif_title : Msg::tooltip_stop_video_title,
+                recording.gif ? Msg::tooltip_stop_gif_body : Msg::tooltip_stop_video_body);
+    } else if (mediaBusy) {
+        if (recording.mediaCancelRequested) ImGui::BeginDisabled();
+        if (ImGui::Button(recording.mediaCancelRequested ? Tr(Msg::cancelling) : Tr(Msg::cancel_gif),
+                          ImVec2(220.0F, 38.0F))) {
+            command.cancelMediaJob = true;
+        }
+        if (recording.mediaCancelRequested) ImGui::EndDisabled();
+    } else if (panel.activeTab == 0) {
+        const char* label = panel.screenshotDestination == 1
+            ? (CurrentLanguage() == Language::Korean ? "스크린샷 저장" : "Save screenshot")
+            : panel.screenshotDestination == 2
+                ? (CurrentLanguage() == Language::Korean ? "저장하고 복사" : "Save and copy")
+                : Tr(Msg::copy_to_clipboard);
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16F, 0.38F, 0.72F, 1.0F));
+        if (ImGui::Button(label, ImVec2(220.0F, 38.0F))) {
+            if (panel.screenshotDestination == 1) command.saveScreenshot = true;
+            else if (panel.screenshotDestination == 2) command.saveAndCopyScreenshot = true;
+            else command.copyScreenshot = true;
+        }
+        ImGui::PopStyleColor();
+        Explain(panel.screenshotDestination == 1 ? Msg::tooltip_png_title :
+                panel.screenshotDestination == 2 ? Msg::tooltip_png_copy_title : Msg::tooltip_copy_title,
+                panel.screenshotDestination == 1 ? Msg::tooltip_png_body :
+                panel.screenshotDestination == 2 ? Msg::tooltip_png_copy_body : Msg::tooltip_copy_body);
+    } else if (panel.activeTab == 1) {
+        if (recording.canRemux) {
+            if (ImGui::Button(Tr(Msg::convert_to_mp4), ImVec2(180.0F, 38.0F))) {
+                command.remuxLastRecording = true;
+            }
+            Explain(Msg::tooltip_remux_title, Msg::tooltip_remux_body);
+            ImGui::SameLine();
+        }
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16F, 0.38F, 0.72F, 1.0F));
+        if (ImGui::Button(Tr(Msg::start_video), ImVec2(220.0F, 38.0F))) command.startRecording = true;
+        ImGui::PopStyleColor();
+        Explain(Msg::tooltip_start_video_title, Msg::tooltip_start_video_body);
+    } else if (panel.activeTab == 2) {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16F, 0.38F, 0.72F, 1.0F));
+        if (ImGui::Button(Tr(Msg::start_gif), ImVec2(220.0F, 38.0F))) command.startGif = true;
+        ImGui::PopStyleColor();
+        Explain(Msg::tooltip_start_gif_title, Msg::tooltip_start_gif_body);
+    }
+
+    ImGui::EndChild();
+    ImGui::PopStyleVar(2);
 }
 
 void DrawSettingsTab(MainPanelCommand& command, MainPanelState& panel, const DisplayUiState& display,
@@ -1176,6 +1422,7 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
                                  const RegionSelectionUiState& regionSelection,
                                  const DisplayUiState& display,
                                  const ScreenshotUiState& screenshot,
+                                 const QuickCaptureUiState& quickCapture,
                                  const TrayUiState& tray,
                                  CaptureTargetPicker& picker, WindowsGraphicsCapture& capture,
                                  ID3D11Device* device) {
@@ -1213,38 +1460,41 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     ImGui::BeginChild("MainContent", ImVec2(contentWidth, 0.0F));
     ImGui::PopStyleColor();
 
-    DrawHeader(command, recording, outputDirectory, picker);
-    if (recording.active || !recording.outputPath.empty()) DrawStatusBar(recording);
+    if (panel.targetType < 0) panel.targetType = static_cast<int>(picker.Selected().type);
+    DrawHeader(recording);
+    DrawSourceBar(panel, command, recording, outputDirectory, targetOverlayStatus, picker);
 
+    const std::string captureTab = std::string(Tr(Msg::tab_capture)) + "###CaptureTab";
+    const std::string videoTab = std::string(Tr(Msg::tab_video)) + "###VideoTab";
+    const std::string gifTab = std::string(Tr(Msg::tab_gif)) + "###GifTab";
+    const std::string settingsTab = std::string(Tr(Msg::tab_settings)) + "###SettingsTab";
     if (ImGui::BeginTabBar("MainSections")) {
-        ImGuiTabItemFlags captureFlags = 0;
-        if (panel.focusCaptureTab) {
-            captureFlags = ImGuiTabItemFlags_SetSelected;
-            panel.focusCaptureTab = false;
-        }
-        if (ImGui::BeginTabItem(Tr(Msg::tab_capture), nullptr, captureFlags)) {
+        if (ImGui::BeginTabItem(captureTab.c_str())) {
             panel.activeTab = 0;
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem(Tr(Msg::tab_video))) {
+        if (ImGui::BeginTabItem(videoTab.c_str())) {
             panel.activeTab = 1;
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem(Tr(Msg::tab_gif))) {
+        if (ImGui::BeginTabItem(gifTab.c_str())) {
             panel.activeTab = 2;
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem(Tr(Msg::tab_settings))) {
+        if (ImGui::BeginTabItem(settingsTab.c_str())) {
             panel.activeTab = 3;
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();
     }
 
+    constexpr float kSessionCommandBarHeight = 72.0F;
+    ImGui::BeginChild("ModeContent", ImVec2(0.0F, -kSessionCommandBarHeight));
+    if (recording.active || !recording.outputPath.empty()) DrawStatusBar(recording);
     if (panel.activeTab == 0) {
-        DrawCaptureTab(command, panel, picker, screenshot, screenshotStatus, targetOverlayStatus);
+        DrawCaptureTab(command, panel, screenshot, screenshotStatus);
     } else if (panel.activeTab == 1) {
-        DrawVideoTab(command, panel, encoderChoices, recording, audioStatus, remuxStatus, mediaBusy);
+        DrawVideoTab(command, panel, encoderChoices, audioStatus, remuxStatus);
     } else if (panel.activeTab == 2) {
         DrawGifTab(command, panel, recording, gifStatus, outputBusy, mediaBusy);
     } else {
@@ -1261,9 +1511,10 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
         ImGui::TextColored(ImVec4(1.0F, 0.75F, 0.25F, 1.0F), "%.*s",
                            static_cast<int>(recoveryStatus.size()), recoveryStatus.data());
     }
-    DrawTargetPopups(panel, picker, device);
-    ImGui::Spacing();
-    ImGui::TextDisabled("%s", Tr(Msg::footer_ready));
+    ImGui::EndChild();
+    DrawSessionCommandBar(command, panel, recording, mediaBusy);
+    DrawTargetPopups(command, panel, picker, device);
+    DrawQuickCapturePopup(command, panel, quickCapture);
     ImGui::EndChild();
     ImGui::End();
     CopyRecordingCommand(command, panel, encoderChoices);

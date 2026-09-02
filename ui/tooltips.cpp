@@ -10,7 +10,8 @@ void ExplainLastItem(const char* title, const char* body, bool allowWhenDisabled
     flags |= ImGuiHoveredFlags_Stationary;
 #endif
     if (allowWhenDisabled) flags |= ImGuiHoveredFlags_AllowWhenDisabled;
-    const bool show = ImGui::IsItemHovered(flags) || ImGui::IsItemFocused();
+    const bool keyboardFocused = ImGui::GetIO().NavVisible && ImGui::IsItemFocused();
+    const bool show = ImGui::IsItemHovered(flags) || keyboardFocused;
     if (!show) return;
     if (!ImGui::BeginTooltip()) return;
     ImGui::PushTextWrapPos(ImGui::GetFontSize() * 28.0F);

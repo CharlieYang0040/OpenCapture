@@ -31,6 +31,7 @@ extern "C" {
 #include <dwmapi.h>
 #include <ShlObj.h>
 #include <ShObjIdl.h>
+#include <shellapi.h>
 #include <wincodec.h>
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
@@ -191,13 +192,20 @@ void Win32D3D11App::LoadScreenshotSettings() {
     std::ifstream input(ScreenshotSettingsPath());
     if (!input) return;
     std::string line;
+    bool sawProfile{};
     while (std::getline(input, line)) {
         constexpr std::string_view prefix = "shortcut_destination=";
         if (line.rfind(prefix, 0) == 0) {
             screenshotHotkeyDestination_ = ParseScreenshotDestination(
                 std::string_view(line).substr(prefix.size()));
         }
+        constexpr std::string_view profilePrefix = "profile=";
+        if (line.rfind(profilePrefix, 0) == 0) {
+            screenshotProfile_ = ParseScreenshotProfile(std::string_view(line).substr(profilePrefix.size()));
+            sawProfile = true;
+        }
     }
+    if (!sawProfile) screenshotProfile_ = ScreenshotProfile::PngLossless;
 }
 
 bool Win32D3D11App::SaveScreenshotSettings() const {
@@ -209,6 +217,7 @@ bool Win32D3D11App::SaveScreenshotSettings() const {
         if (!output) return false;
         output << "shortcut_destination="
                << ScreenshotDestinationSettingValue(screenshotHotkeyDestination_) << '\n';
+        output << "profile=" << ScreenshotProfileSettingValue(screenshotProfile_) << '\n';
         if (!output) return false;
     }
     return MoveFileExW(temporary.c_str(), path.c_str(),
@@ -247,7 +256,7 @@ void Win32D3D11App::LoadRecordingSettings() {
     input.close();
     const auto serialized = text.str();
     const auto parsed = ParseRecordingPreferences(serialized);
-    const bool currentProfileSchema = serialized.find("profile_schema=3") != std::string::npos;
+    const bool currentProfileSchema = serialized.find("profile_schema=4") != std::string::npos;
     recordingPreferences_ = currentProfileSchema || parsed.profile == RecordingProfile::Custom
         ? parsed
         : ApplyRecordingProfile(parsed, parsed.profile);
@@ -269,24 +278,28 @@ bool Win32D3D11App::SaveRecordingSettings() const {
 }
 
 void Win32D3D11App::ApplyRecordingPreferencesFromCommand(const MainPanelCommand& command) {
-    RecordingPreferences next = ClampRecordingPreferences({
-        command.framesPerSecond,
-        command.quality,
-        command.remuxToMp4,
-        command.systemAudio,
-        command.microphone,
-        command.encoderName,
-        command.gifFramesPerSecond,
-        command.gifHeight,
-        command.gifColors,
-        command.recordingProfile,
-        command.videoCodec,
-        command.videoResolution,
-        command.encoderEfficiency,
-        command.customBitRateMbps,
-        command.allowCodecFallback,
-        command.useCustomBitRate,
-    });
+    RecordingPreferences next{};
+    next.framesPerSecond = command.framesPerSecond;
+    next.quality = command.quality;
+    next.remuxToMp4 = command.remuxToMp4;
+    next.systemAudio = command.systemAudio;
+    next.microphone = command.microphone;
+    next.encoderName = command.encoderName;
+    next.gifFramesPerSecond = command.gifFramesPerSecond;
+    next.gifHeight = command.gifHeight;
+    next.gifColors = command.gifColors;
+    next.animationFormat = command.animationFormat;
+    next.animationProfile = command.animationProfile;
+    next.animationQuality = command.animationQuality;
+    next.avifCrf = command.avifCrf;
+    next.profile = command.recordingProfile;
+    next.codec = command.videoCodec;
+    next.resolution = command.videoResolution;
+    next.efficiency = command.encoderEfficiency;
+    next.customBitRateMbps = command.customBitRateMbps;
+    next.allowCodecFallback = command.allowCodecFallback;
+    next.useCustomBitRate = command.useCustomBitRate;
+    next = ClampRecordingPreferences(std::move(next));
     if (next == recordingPreferences_) return;
     const auto previous = recordingPreferences_;
     recordingPreferences_ = std::move(next);
@@ -302,6 +315,7 @@ void Win32D3D11App::ResetAllSettings() {
     targetOverlayStatus_ = targetOverlay_.LastError();
     targetPicker_.ResetSelectionSettings();
     screenshotHotkeyDestination_ = ScreenshotDestination::Clipboard;
+    screenshotProfile_ = ScreenshotProfile::WebpBalanced;
     if (SaveScreenshotSettings()) {
         screenshotStatus_ = Tr(Msg::status_screenshot_restored);
     }
@@ -608,12 +622,30 @@ bool Win32D3D11App::Initialize(HINSTANCE instance, int showCommand) {
     encoderSummary_ = encoderRegistry_.Summary();
     if (!InitializeOutputDirectory()) return false;
     ScanRecoverableRecordings();
+    if (std::wcsstr(GetCommandLineW(), L"--quick-capture-popup-smoke") != nullptr) {
+        CaptureTarget smokeTarget{};
+        smokeTarget.type = CaptureTargetType::Region;
+        smokeTarget.monitor = MonitorFromWindow(window_, MONITOR_DEFAULTTOPRIMARY);
+        MONITORINFO monitorInfo{};
+        monitorInfo.cbSize = sizeof(monitorInfo);
+        if (GetMonitorInfoW(smokeTarget.monitor, &monitorInfo)) {
+            const LONG width = std::max<LONG>(320, (monitorInfo.rcMonitor.right - monitorInfo.rcMonitor.left) / 3);
+            const LONG height = std::max<LONG>(180, (monitorInfo.rcMonitor.bottom - monitorInfo.rcMonitor.top) / 3);
+            smokeTarget.region = RECT{monitorInfo.rcMonitor.left + 80, monitorInfo.rcMonitor.top + 80,
+                                      monitorInfo.rcMonitor.left + 80 + width,
+                                      monitorInfo.rcMonitor.top + 80 + height};
+            quickCaptureTarget_ = smokeTarget;
+        }
+    }
     initialized_ = true;
     ShowWindow(window_, showCommand);
     UpdateWindow(window_);
     if (gifConvertSmokeMode_) {
         const auto input = ReadEnvironmentUtf8(L"OPENCAPTURE_GIF_INPUT");
         const auto output = ReadEnvironmentUtf8(L"OPENCAPTURE_GIF_OUTPUT");
+        const auto outputExtension = std::filesystem::path(ToWide(output)).extension().wstring();
+        const bool webpSmoke = _wcsicmp(outputExtension.c_str(), L".webp") == 0;
+        const bool avifSmoke = _wcsicmp(outputExtension.c_str(), L".avif") == 0;
         if (gifCancelSmokeMode_ && !input.empty() && !output.empty()) {
             std::stop_source cancellation;
             const bool converted = gifConverter_.Convert(
@@ -623,12 +655,18 @@ bool Win32D3D11App::Initialize(HINSTANCE instance, int showCommand) {
                 });
             captureSmokeFailed_ = converted ||
                 gifConverter_.LastError().find("cancelled") == std::string::npos;
+        } else if (webpSmoke || avifSmoke) {
+            captureSmokeFailed_ = input.empty() || output.empty() ||
+                !animationConverter_.Convert(input, output,
+                    {webpSmoke ? AnimationFormat::WebP : AnimationFormat::Avif, 82, 34});
         } else {
             captureSmokeFailed_ = input.empty() || output.empty() ||
                 !gifConverter_.Convert(input, output, {128});
         }
         if (captureSmokeFailed_) WriteSmokeFailure(
-            gifConverter_.LastError().empty()
+            (webpSmoke || avifSmoke) && !animationConverter_.LastError().empty()
+                ? animationConverter_.LastError()
+                : gifConverter_.LastError().empty()
                 ? "OPENCAPTURE_GIF_INPUT and OPENCAPTURE_GIF_OUTPUT are required."
                 : gifConverter_.LastError());
         PostMessageW(window_, WM_CLOSE, 0, 0);
@@ -1009,6 +1047,27 @@ bool Win32D3D11App::ChooseOutputDirectory() {
     return true;
 }
 
+bool Win32D3D11App::OpenOutputDirectory() {
+    if (outputDirectory_.empty()) {
+        frameProcessingError_ = "The output folder is not configured.";
+        return false;
+    }
+    std::error_code error;
+    std::filesystem::create_directories(outputDirectory_, error);
+    if (error) {
+        frameProcessingError_ = "Could not create the output folder.";
+        return false;
+    }
+    const auto result = reinterpret_cast<std::intptr_t>(
+        ShellExecuteW(window_, L"open", outputDirectory_.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+    if (result <= 32) {
+        frameProcessingError_ = "Could not open the output folder in Explorer.";
+        return false;
+    }
+    frameProcessingError_.clear();
+    return true;
+}
+
 void Win32D3D11App::ScanRecoverableRecordings() {
     recoveryStatus_.clear();
     recoverableRecordings_.clear();
@@ -1266,15 +1325,15 @@ bool Win32D3D11App::ConvertRecordingToGif() {
     const std::filesystem::path source(ToWide(recordingPath_));
     const std::filesystem::path destination(ToWide(gifOutputPath_));
     const auto temporary = destination.parent_path() /
-        (destination.stem().wstring() + L".part.gif");
+        (destination.stem().wstring() + L".part" + destination.extension().wstring());
     std::error_code error;
     if (!std::filesystem::is_regular_file(source, error) || error) {
-        frameProcessingError_ = "The GIF source recording is missing.";
+        frameProcessingError_ = "The animation source recording is missing.";
         gifStatus_ = frameProcessingError_;
         return false;
     }
     if (std::filesystem::exists(destination, error) || std::filesystem::exists(temporary, error)) {
-        frameProcessingError_ = "The GIF output or temporary file already exists. The source MKV was kept.";
+        frameProcessingError_ = "The animation output or temporary file already exists. The source MKV was kept.";
         gifStatus_ = frameProcessingError_;
         return false;
     }
@@ -1282,12 +1341,13 @@ bool Win32D3D11App::ConvertRecordingToGif() {
     if (error || !HasRecordingSpace(ToUtf8(temporary.c_str()),
                                     std::max<std::uint64_t>(128ULL * 1024 * 1024, sourceBytes * 2))) {
         gifStatus_ = frameProcessingError_.empty()
-            ? "Not enough free space to create the GIF. The source MKV was kept."
+            ? "Not enough free space to create the animation. The source MKV was kept."
             : frameProcessingError_ + " The source MKV was kept.";
         return false;
     }
     frameProcessingError_.clear();
-    gifStatus_ = "Analyzing colors for GIF...";
+    gifStatus_ = recordingAnimationFormat_ == AnimationFormat::Gif
+        ? "Analyzing colors for GIF..." : "Creating animation...";
     mediaProgress_ = 0.0;
     mediaJobFinished_ = false;
     mediaJobRunning_ = true;
@@ -1297,39 +1357,48 @@ bool Win32D3D11App::ConvertRecordingToGif() {
     const auto temporaryUtf8 = ToUtf8(temporary.c_str());
     const auto destinationUtf8 = gifOutputPath_;
     const int colors = gifColors_;
+    const auto format = recordingAnimationFormat_;
+    const int quality = animationQuality_;
+    const int avifCrf = animationAvifCrf_;
     mediaWorker_ = std::jthread(
-        [this, source, destination, temporary, sourceUtf8, temporaryUtf8, destinationUtf8, colors]
+        [this, source, destination, temporary, sourceUtf8, temporaryUtf8, destinationUtf8,
+         colors, format, quality, avifCrf]
         (std::stop_token stopToken) {
-            bool success = gifConverter_.Convert(
-                sourceUtf8, temporaryUtf8, {colors}, stopToken,
-                [this](double value) { mediaProgress_ = value; });
+            bool success = format == AnimationFormat::Gif
+                ? gifConverter_.Convert(sourceUtf8, temporaryUtf8, {colors}, stopToken,
+                                        [this](double value) { mediaProgress_ = value; })
+                : animationConverter_.Convert(sourceUtf8, temporaryUtf8,
+                                               {format, quality, avifCrf}, stopToken,
+                                               [this](double value) { mediaProgress_ = value; });
             std::string result;
             std::error_code workerError;
             if (success && stopToken.stop_requested()) {
                 success = false;
-                result = "GIF conversion cancelled. The source MKV was kept.";
+                result = "Animation conversion cancelled. The source MKV was kept.";
             }
             if (success) {
                 std::filesystem::rename(temporary, destination, workerError);
                 if (workerError) {
                     success = false;
-                    result = "Could not finalize the GIF name. The source MKV was kept.";
+                    result = "Could not finalize the animation name. The source MKV was kept.";
                 }
             }
             if (success) {
-                const auto gifBytes = std::filesystem::file_size(destination, workerError);
+                const auto outputBytes = std::filesystem::file_size(destination, workerError);
                 const bool sizeKnown = !workerError;
                 std::error_code removeError;
                 std::filesystem::remove(source, removeError);
                 std::ostringstream status;
-                status << "GIF saved: " << destinationUtf8;
-                if (sizeKnown) status << " (" << (gifBytes / 1024) << " KiB)";
+                status << "Animation saved: " << destinationUtf8;
+                if (sizeKnown) status << " (" << (outputBytes / 1024) << " KiB)";
                 if (removeError) status << " The safe source MKV was also kept.";
                 result = status.str();
             } else {
                 std::filesystem::remove(temporary, workerError);
                 if (result.empty()) {
-                    result = gifConverter_.LastError() + " The source MKV was kept.";
+                    result = (format == AnimationFormat::Gif ? gifConverter_.LastError()
+                                                              : animationConverter_.LastError()) +
+                             " The source MKV was kept.";
                 }
             }
             {
@@ -1371,10 +1440,10 @@ void Win32D3D11App::PollMediaJob() {
 void Win32D3D11App::CancelMediaJob() {
     if (!mediaJobRunning_ || !mediaWorker_.joinable()) return;
     mediaWorker_.request_stop();
-    gifStatus_ = "Cancelling GIF conversion...";
+    gifStatus_ = "Cancelling animation conversion...";
 }
 
-std::wstring Win32D3D11App::MakeScreenshotPath() const {
+std::wstring Win32D3D11App::MakeScreenshotPath(ScreenshotProfile profile) const {
     std::filesystem::path directory(outputDirectory_);
     std::error_code error;
     std::filesystem::create_directories(directory, error);
@@ -1382,10 +1451,11 @@ std::wstring Win32D3D11App::MakeScreenshotPath() const {
     SYSTEMTIME time{};
     GetLocalTime(&time);
     wchar_t fileName[96]{};
-    swprintf_s(fileName, L"OpenCapture_%04u%02u%02u_%02u%02u%02u_%03u.png",
+    swprintf_s(fileName, L"OpenCapture_%04u%02u%02u_%02u%02u%02u_%03u",
                time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute,
                time.wSecond, time.wMilliseconds);
-    const auto base = directory / fileName;
+    const auto base = directory /
+        (std::wstring(fileName) + std::wstring(ScreenshotProfileExtension(profile)));
     if (!std::filesystem::exists(base)) return base.wstring();
     for (int suffix = 1; suffix < 1000; ++suffix) {
         const auto candidate = directory /
@@ -1469,11 +1539,10 @@ bool Win32D3D11App::StartQuickCapture() {
         screenshotStatus_ = "Quick Capture cancelled.";
         return false;
     }
-    return StartScreenshot({
-        screenshotHotkeyDestination_,
-        temporaryTarget,
-        ScreenshotRequestOrigin::QuickCapture,
-    });
+    quickCaptureTarget_ = temporaryTarget;
+    screenshotStatus_ = "Choose Screenshot, Video, or Animation for the selected region.";
+    uiDirty_ = true;
+    return true;
 }
 
 bool Win32D3D11App::StartScreenshot(ScreenshotRequest request) {
@@ -1521,16 +1590,17 @@ bool Win32D3D11App::ProcessScreenshotFrame(const CapturedFrame& frame) {
     }
     const auto request = *pendingScreenshot_;
     const auto destination = request.destination;
-    const auto path = destination == ScreenshotDestination::Clipboard ? std::wstring{} : MakeScreenshotPath();
+    const auto profile = request.profile;
+    const auto path = destination == ScreenshotDestination::Clipboard ? std::wstring{} : MakeScreenshotPath(profile);
     const bool success = screenshotService_.Capture(device_.Get(), context_.Get(), processed->texture.Get(),
-                                                    processed->contentSize, destination, path, window_);
+                                                    processed->contentSize, destination, path, window_, profile);
     if (success) {
         if (destination == ScreenshotDestination::Clipboard) {
             screenshotStatus_ = "Screenshot copied to the clipboard without creating a file.";
         } else if (destination == ScreenshotDestination::File) {
-            screenshotStatus_ = "PNG saved: " + ToUtf8(path.c_str());
+            screenshotStatus_ = "Screenshot saved: " + ToUtf8(path.c_str());
         } else {
-            screenshotStatus_ = "PNG saved and copied: " + ToUtf8(path.c_str());
+            screenshotStatus_ = "Screenshot saved and copied: " + ToUtf8(path.c_str());
         }
     } else {
         screenshotStatus_ = screenshotService_.LastError();
@@ -1546,7 +1616,8 @@ bool Win32D3D11App::ProcessScreenshotFrame(const CapturedFrame& frame) {
 
 bool Win32D3D11App::StartRecording(int framesPerSecond, int quality, std::string requestedEncoder,
                                    bool systemAudio, bool microphone, bool remuxToMp4,
-                                   bool gif, int gifHeight, int gifColors) {
+                                   bool gif, int gifHeight, int gifColors,
+                                   const CaptureTarget* overrideTarget) {
     if (recordingState_.Phase() == SessionPhase::Failed) recordingState_.Reset();
     if (!recordingState_.BeginStart()) return false;
     recordingCodec_ = gif ? VideoCodecPreference::H264 : recordingPreferences_.codec;
@@ -1568,7 +1639,8 @@ bool Win32D3D11App::StartRecording(int framesPerSecond, int quality, std::string
     recordingAllowCodecFallback_ = gif || recordingPreferences_.allowCodecFallback;
     const auto candidates = encoderRegistry_.Candidates(recordingCodec_, requestedEncoder,
                                                          recordingAllowCodecFallback_);
-    if (!targetPicker_.Selected().IsValid() || candidates.empty()) {
+    recordingTarget_ = overrideTarget ? *overrideTarget : targetPicker_.Selected();
+    if (!recordingTarget_.IsValid() || candidates.empty()) {
         FailRecording(requestedEncoder.empty()
                           ? "Select a valid capture target and ensure the requested video codec is available."
                           : "The requested video encoder is not available on the active adapter.");
@@ -1585,18 +1657,23 @@ bool Win32D3D11App::StartRecording(int framesPerSecond, int quality, std::string
     recordingMaximumHeight_ = gif ? std::clamp(gifHeight, 360, 1080)
                                   : ResolutionHeightLimit(recordingPreferences_.resolution);
     gifColors_ = std::clamp(gifColors, 32, 256);
+    recordingAnimationFormat_ = recordingPreferences_.animationFormat;
+    animationQuality_ = recordingPreferences_.animationQuality;
+    animationAvifCrf_ = recordingPreferences_.avifCrf;
     gifDurationLimit_ = 30.0;
     gifOutputPath_.clear();
     gifStatus_.clear();
     if (recordingGif_) {
         std::filesystem::path source(ToWide(recordingPath_));
         const auto baseStem = source.stem().wstring();
-        gifOutputPath_ = ToUtf8((source.parent_path() / (baseStem + L".gif")).c_str());
-        source = source.parent_path() / (baseStem + L".gif-source.mkv");
+        const wchar_t* extension = recordingAnimationFormat_ == AnimationFormat::Gif ? L".gif" :
+                                   recordingAnimationFormat_ == AnimationFormat::WebP ? L".webp" : L".avif";
+        gifOutputPath_ = ToUtf8((source.parent_path() / (baseStem + extension)).c_str());
+        source = source.parent_path() / (baseStem + L".animation-source.mkv");
         recordingPath_ = ToUtf8(source.c_str());
         if (std::filesystem::exists(source) ||
             std::filesystem::exists(std::filesystem::path(ToWide(gifOutputPath_)))) {
-            FailRecording("A GIF source or output with the same name already exists.");
+            FailRecording("An animation source or output with the same name already exists.");
             return false;
         }
     }
@@ -1662,7 +1739,7 @@ bool Win32D3D11App::StartRecording(int framesPerSecond, int quality, std::string
         audioStatus_ = recordingGif_ ? "GIF does not include audio" : "Audio disabled";
     }
     capture_.Stop();
-    if (!capture_.Start(targetPicker_.Selected(), device_.Get(), recordingFramesPerSecond_)) {
+    if (!capture_.Start(recordingTarget_, device_.Get(), recordingFramesPerSecond_)) {
         FailRecording(capture_.LastError().empty() ? "Could not start Windows Graphics Capture." : capture_.LastError());
         return false;
     }
@@ -2156,10 +2233,17 @@ bool Win32D3D11App::RunScreenshotSmoke() {
         return false;
     }
     const auto outputPath = ReadEnvironmentWide(L"OPENCAPTURE_SCREENSHOT_OUTPUT");
+    const auto outputExtension = std::filesystem::path(outputPath).extension().wstring();
+    const auto profile = _wcsicmp(outputExtension.c_str(), L".webp") == 0
+        ? ScreenshotProfile::WebpBalanced
+        : _wcsicmp(outputExtension.c_str(), L".jpg") == 0 || _wcsicmp(outputExtension.c_str(), L".jpeg") == 0
+            ? ScreenshotProfile::JpegCompatible
+            : _wcsicmp(outputExtension.c_str(), L".avif") == 0
+                ? ScreenshotProfile::AvifSmallest : ScreenshotProfile::PngLossless;
     if (outputPath.empty() ||
         !screenshotService_.Capture(device_.Get(), context_.Get(), texture.Get(),
                                     SIZE{static_cast<LONG>(width), static_cast<LONG>(height)},
-                                    ScreenshotDestination::FileAndClipboard, outputPath, window_)) {
+                                    ScreenshotDestination::FileAndClipboard, outputPath, window_, profile)) {
         frameProcessingError_ = outputPath.empty()
                                     ? "OPENCAPTURE_SCREENSHOT_OUTPUT is required."
                                     : screenshotService_.LastError();
@@ -2176,14 +2260,20 @@ bool Win32D3D11App::RunScreenshotSmoke() {
     Microsoft::WRL::ComPtr<IWICBitmapFrameDecode> decodedFrame;
     UINT decodedWidth{};
     UINT decodedHeight{};
-    if (FAILED(CoCreateInstance(CLSID_WICImagingFactory2, nullptr, CLSCTX_INPROC_SERVER,
+    if ((profile == ScreenshotProfile::PngLossless || profile == ScreenshotProfile::JpegCompatible) &&
+        (FAILED(CoCreateInstance(CLSID_WICImagingFactory2, nullptr, CLSCTX_INPROC_SERVER,
                                 IID_PPV_ARGS(&imagingFactory))) ||
         FAILED(imagingFactory->CreateDecoderFromFilename(outputPath.c_str(), nullptr, GENERIC_READ,
                                                          WICDecodeMetadataCacheOnLoad, &decoder)) ||
         FAILED(decoder->GetFrame(0, &decodedFrame)) ||
         FAILED(decodedFrame->GetSize(&decodedWidth, &decodedHeight)) ||
-        decodedWidth != width || decodedHeight != height) {
-        frameProcessingError_ = "WIC could not reopen the screenshot PNG at the expected dimensions.";
+        decodedWidth != width || decodedHeight != height)) {
+        frameProcessingError_ = "WIC could not reopen the screenshot at the expected dimensions.";
+        return false;
+    }
+    if ((profile == ScreenshotProfile::WebpBalanced || profile == ScreenshotProfile::AvifSmallest) &&
+        (!std::filesystem::is_regular_file(outputPath) || std::filesystem::file_size(outputPath) == 0)) {
+        frameProcessingError_ = "The modern screenshot encoder did not create a valid-sized file.";
         return false;
     }
     bool clipboardOpen{};
@@ -2356,7 +2446,9 @@ void Win32D3D11App::DispatchUi(bool present) {
         };
         const ScreenshotUiState screenshotUi{
             screenshotHotkeyDestination_,
+            screenshotProfile_,
         };
+        const QuickCaptureUiState quickCaptureUi{quickCaptureTarget_.has_value()};
         const TrayUiState trayUi{
             systemTray_.Available(),
             closeToTray_,
@@ -2373,7 +2465,7 @@ void Win32D3D11App::DispatchUi(bool present) {
                                   outputDirectoryUtf8_,
                                   recoverableRecordings_,
                                   recordingUi, recordingPreferences_, hotkeyUi, borderUi, regionSelectionUi, displayUi,
-                                  screenshotUi, trayUi,
+                                  screenshotUi, quickCaptureUi, trayUi,
                                   targetPicker_, capture_, device_.Get());
         ApplyMainPanelCommand(command);
     }
@@ -2398,6 +2490,12 @@ void Win32D3D11App::ApplyMainPanelCommand(const MainPanelCommand& command) {
             screenshotHotkeyDestination_ = previous;
             screenshotStatus_ = Tr(Msg::status_screenshot_setting_failed);
         }
+        uiDirty_ = true;
+    }
+    if (command.applyScreenshotProfile) {
+        const auto previous = screenshotProfile_;
+        screenshotProfile_ = command.screenshotProfile;
+        if (!SaveScreenshotSettings()) screenshotProfile_ = previous;
         uiDirty_ = true;
     }
     if (command.applyCloseToTray) {
@@ -2455,6 +2553,29 @@ void Win32D3D11App::ApplyMainPanelCommand(const MainPanelCommand& command) {
     if (command.applyRecordingSettings) ApplyRecordingPreferencesFromCommand(command);
     if (command.resetAllSettings) ResetAllSettings();
     if (command.chooseOutputDirectory && !RecordingActive() && !mediaJobRunning_) ChooseOutputDirectory();
+    if (command.openOutputDirectory) OpenOutputDirectory();
+    if (command.cancelQuickCapture) quickCaptureTarget_.reset();
+    if (command.quickCaptureScreenshot && quickCaptureTarget_) {
+        const auto target = *quickCaptureTarget_;
+        quickCaptureTarget_.reset();
+        StartScreenshot({screenshotHotkeyDestination_, target, ScreenshotRequestOrigin::QuickCapture,
+                         screenshotProfile_});
+    }
+    if (command.quickCaptureVideo && quickCaptureTarget_ && !mediaJobRunning_) {
+        const auto target = *quickCaptureTarget_;
+        quickCaptureTarget_.reset();
+        ApplyRecordingPreferencesFromCommand(command);
+        StartRecording(command.framesPerSecond, command.quality, command.encoderName,
+                       command.systemAudio, command.microphone, command.remuxToMp4,
+                       false, 720, 256, &target);
+    }
+    if (command.quickCaptureAnimation && quickCaptureTarget_ && !mediaJobRunning_) {
+        const auto target = *quickCaptureTarget_;
+        quickCaptureTarget_.reset();
+        ApplyRecordingPreferencesFromCommand(command);
+        StartRecording(command.gifFramesPerSecond, 0, command.encoderName,
+                       false, false, false, true, command.gifHeight, command.gifColors, &target);
+    }
     if (command.recoverRecordingIndex >= 0) {
         RecoverRecording(static_cast<std::size_t>(command.recoverRecordingIndex));
     }
@@ -2486,15 +2607,15 @@ void Win32D3D11App::ApplyMainPanelCommand(const MainPanelCommand& command) {
     if (command.cancelMediaJob) CancelMediaJob();
     if (command.copyScreenshot) StartScreenshot({
         ScreenshotDestination::Clipboard, targetPicker_.Selected(),
-        ScreenshotRequestOrigin::MainPanel,
+        ScreenshotRequestOrigin::MainPanel, screenshotProfile_,
     });
     if (command.saveScreenshot) StartScreenshot({
         ScreenshotDestination::File, targetPicker_.Selected(),
-        ScreenshotRequestOrigin::MainPanel,
+        ScreenshotRequestOrigin::MainPanel, screenshotProfile_,
     });
     if (command.saveAndCopyScreenshot) StartScreenshot({
         ScreenshotDestination::FileAndClipboard, targetPicker_.Selected(),
-        ScreenshotRequestOrigin::MainPanel,
+        ScreenshotRequestOrigin::MainPanel, screenshotProfile_,
     });
 }
 
@@ -2505,7 +2626,7 @@ void Win32D3D11App::ProcessPendingHotkeys() {
     if ((hotkeyActions & (1U << static_cast<unsigned>(HotkeyAction::Screenshot))) != 0) {
         StartScreenshot({
             screenshotHotkeyDestination_, targetPicker_.Selected(),
-            ScreenshotRequestOrigin::SelectedTargetHotkey,
+            ScreenshotRequestOrigin::SelectedTargetHotkey, screenshotProfile_,
         });
     }
     if ((hotkeyActions & (1U << static_cast<unsigned>(HotkeyAction::ToggleVideoRecording))) != 0) {
@@ -2544,7 +2665,7 @@ void Win32D3D11App::UpdateTargetOverlay() {
     } else if (currentPhase == SessionPhase::Failed) {
         overlayState = CaptureOverlayState::Error;
     }
-    targetOverlay_.Update(targetPicker_.Selected(), overlayState);
+    targetOverlay_.Update(RecordingActive() ? recordingTarget_ : targetPicker_.Selected(), overlayState);
 }
 
 void Win32D3D11App::HandleSmokeTests() {

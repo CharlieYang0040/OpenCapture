@@ -67,6 +67,11 @@ struct HotkeyUiState {
 
 struct ScreenshotUiState {
     ScreenshotDestination shortcutDestination{ScreenshotDestination::Clipboard};
+    ScreenshotProfile profile{ScreenshotProfile::WebpBalanced};
+};
+
+struct QuickCaptureUiState {
+    bool actionPending{};
 };
 
 struct TrayUiState {
@@ -97,6 +102,11 @@ struct DisplayUiState {
 struct MainPanelCommand {
     bool selectRegion{};
     bool chooseOutputDirectory{};
+    bool openOutputDirectory{};
+    bool quickCaptureScreenshot{};
+    bool quickCaptureVideo{};
+    bool quickCaptureAnimation{};
+    bool cancelQuickCapture{};
     int recoverRecordingIndex{-1};
     bool startRecording{};
     bool stopRecording{};
@@ -111,6 +121,7 @@ struct MainPanelCommand {
     bool saveAndCopyScreenshot{};
     bool quickCapture{};
     bool applyScreenshotShortcutDestination{};
+    bool applyScreenshotProfile{};
     bool applyCloseToTray{};
     int listenHotkeyAction{-1};
     bool cancelHotkeyCapture{};
@@ -138,6 +149,7 @@ struct MainPanelCommand {
     int regionOutsideDimmingPercent{30};
     int uiScalePercent{100};
     ScreenshotDestination screenshotShortcutDestination{ScreenshotDestination::Clipboard};
+    ScreenshotProfile screenshotProfile{ScreenshotProfile::WebpBalanced};
     bool closeToTray{};
     int framesPerSecond{60};
     int quality{1};
@@ -151,6 +163,10 @@ struct MainPanelCommand {
     int gifFramesPerSecond{12};
     int gifHeight{720};
     int gifColors{256};
+    AnimationFormat animationFormat{AnimationFormat::WebP};
+    AnimationProfile animationProfile{AnimationProfile::Balanced};
+    int animationQuality{82};
+    int avifCrf{34};
     bool systemAudio{true};
     bool microphone{};
     std::string encoderName;
@@ -177,6 +193,7 @@ public:
                                  const RegionSelectionUiState& regionSelection,
                                  const DisplayUiState& display,
                                  const ScreenshotUiState& screenshot,
+                                 const QuickCaptureUiState& quickCapture,
                                  const TrayUiState& tray,
                                  CaptureTargetPicker& picker, WindowsGraphicsCapture& capture,
                                  ID3D11Device* device);

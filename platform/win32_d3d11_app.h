@@ -14,6 +14,7 @@
 #include "encoder/ffmpeg_muxer.h"
 #include "encoder/video_encoder_worker.h"
 #include "encoder/ffmpeg_gif_converter.h"
+#include "encoder/ffmpeg_animation_converter.h"
 #include "core/hotkey.h"
 #include "core/recording_options.h"
 #include "core/session_state.h"
@@ -45,6 +46,7 @@ struct ScreenshotRequest {
     ScreenshotDestination destination{ScreenshotDestination::Clipboard};
     CaptureTarget target{};
     ScreenshotRequestOrigin origin{ScreenshotRequestOrigin::MainPanel};
+    ScreenshotProfile profile{ScreenshotProfile::PngLossless};
 };
 
 class Win32D3D11App final {
@@ -76,7 +78,8 @@ private:
     void PumpRecordingAudio(bool finalDrain = false);
     bool StartRecording(int framesPerSecond, int quality, std::string requestedEncoder = {},
                         bool systemAudio = true, bool microphone = false, bool remuxToMp4 = false,
-                        bool gif = false, int gifHeight = 720, int gifColors = 256);
+                        bool gif = false, int gifHeight = 720, int gifColors = 256,
+                        const CaptureTarget* overrideTarget = nullptr);
     bool PauseRecording();
     bool ResumeRecording();
     void StopRecording();
@@ -88,6 +91,7 @@ private:
     bool CommitRecordingFile();
     bool InitializeOutputDirectory();
     bool ChooseOutputDirectory();
+    bool OpenOutputDirectory();
     bool SaveOutputDirectory() const;
     void ScanRecoverableRecordings();
     bool RecoverRecording(std::size_t index);
@@ -96,7 +100,7 @@ private:
     void PollMediaJob();
     void CancelMediaJob();
     [[nodiscard]] std::int64_t EffectiveRecordingDelta(std::int64_t qpc) const noexcept;
-    [[nodiscard]] std::wstring MakeScreenshotPath() const;
+    [[nodiscard]] std::wstring MakeScreenshotPath(ScreenshotProfile profile) const;
     bool StartScreenshot(ScreenshotRequest request);
     bool RunRegionSelection(bool persistent, CaptureTarget* temporaryTarget = nullptr);
     bool StartQuickCapture();
@@ -158,8 +162,11 @@ private:
     std::wstring outputDirectory_;
     std::string outputDirectoryUtf8_;
     std::optional<ScreenshotRequest> pendingScreenshot_;
+    std::optional<CaptureTarget> quickCaptureTarget_;
+    CaptureTarget recordingTarget_{};
     bool screenshotOwnsCapture_{};
     ScreenshotDestination screenshotHotkeyDestination_{ScreenshotDestination::Clipboard};
+    ScreenshotProfile screenshotProfile_{ScreenshotProfile::WebpBalanced};
     std::uint32_t adapterVendorId_{};
     FFmpegEncoderRegistry encoderRegistry_;
     FFmpegD3D11Encoder videoEncoder_;
@@ -167,6 +174,7 @@ private:
     FFmpegAudioEncoder audioEncoder_;
     FFmpegMuxer muxer_;
     FFmpegGifConverter gifConverter_;
+    FFmpegAnimationConverter animationConverter_;
     WasapiCapture systemAudioCapture_;
     WasapiCapture microphoneCapture_;
     AudioTimelineMixer audioMixer_;
@@ -176,6 +184,9 @@ private:
     bool recordingGif_{};
     int recordingMaximumHeight_{};
     int gifColors_{256};
+    AnimationFormat recordingAnimationFormat_{AnimationFormat::Gif};
+    int animationQuality_{82};
+    int animationAvifCrf_{34};
     double gifDurationLimit_{30.0};
     std::string gifOutputPath_;
     std::string gifStatus_;

@@ -21,7 +21,7 @@ class ScreenshotService final {
 public:
     bool Capture(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11Texture2D* texture,
                  SIZE contentSize, ScreenshotDestination destination, const std::wstring& outputPath,
-                 HWND clipboardOwner);
+                 HWND clipboardOwner, ScreenshotProfile profile = ScreenshotProfile::PngLossless);
 
     [[nodiscard]] const std::string& LastError() const noexcept { return lastError_; }
 
@@ -29,6 +29,9 @@ private:
     bool Download(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11Texture2D* texture,
                   SIZE contentSize, BgraImage& image);
     bool SavePng(const BgraImage& image, const std::wstring& outputPath);
+    bool SaveJpeg(const BgraImage& image, const std::wstring& outputPath, float quality);
+    bool SaveWithFfmpeg(const BgraImage& image, const std::wstring& outputPath,
+                        ScreenshotProfile profile);
     bool CopyToClipboard(const BgraImage& image, HWND owner);
     void SetError(std::string message);
 

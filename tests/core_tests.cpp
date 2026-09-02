@@ -237,13 +237,15 @@ void TestRecordingPreferences() {
     custom.allowCodecFallback = false;
     custom.useCustomBitRate = true;
     const auto serializedCustom = SerializeRecordingPreferences(custom);
-    Check(serializedCustom.starts_with("profile_schema=3\n"),
+    Check(serializedCustom.starts_with("profile_schema=4\n"),
           "recording settings identify the integrated profile schema");
     const auto restored = ParseRecordingPreferences(serializedCustom);
     Check(restored == custom, "recording preferences round-trip through the settings file");
 
-    const auto clamped = ClampRecordingPreferences(RecordingPreferences{
-        8, 9, false, true, false, "bad\nname\r", 14, 500, 100});
+    RecordingPreferences invalid{};
+    invalid.framesPerSecond = 8; invalid.quality = 9; invalid.encoderName = "bad\nname\r";
+    invalid.gifFramesPerSecond = 14; invalid.gifHeight = 500; invalid.gifColors = 100;
+    const auto clamped = ClampRecordingPreferences(invalid);
     Check(clamped.framesPerSecond == 15 && clamped.quality == 2,
           "video settings clamp to the supported range");
     Check(clamped.gifFramesPerSecond == 15 && clamped.gifHeight == 480 &&
@@ -273,6 +275,20 @@ void TestRecordingPreferences() {
           "GIF settings are restored from disk");
     Check(ParseRecordingPreferences("fps=not-a-number\nquality=1\n").framesPerSecond == 60,
           "invalid recording values keep the safe default");
+    const auto legacyAnimation = ParseRecordingPreferences("profile_schema=3\ngif_fps=10\n");
+    Check(legacyAnimation.animationFormat == opencapture::AnimationFormat::Gif,
+          "legacy settings keep GIF output compatibility");
+    const auto smallAnimation = opencapture::ApplyAnimationProfile(
+        defaults, opencapture::AnimationProfile::Smallest);
+    Check(smallAnimation.animationFormat == opencapture::AnimationFormat::Avif &&
+              smallAnimation.gifHeight == 720 && smallAnimation.avifCrf == 34,
+          "smallest animation profile selects AVIF with bounded defaults");
+    const auto webpEstimate = opencapture::EstimateAnimationSize(
+        opencapture::AnimationFormat::WebP, 1280, 720, 12, 10.0, 82, 256, 34);
+    const auto gifEstimate = opencapture::EstimateAnimationSize(
+        opencapture::AnimationFormat::Gif, 1280, 720, 12, 10.0, 82, 256, 34);
+    Check(webpEstimate.minimumBytes > 0 && webpEstimate.maximumBytes < gifEstimate.maximumBytes,
+          "animation estimate communicates WebP size advantage over GIF");
 
     const auto game = opencapture::ApplyRecordingProfile(custom, opencapture::RecordingProfile::Compatibility);
     Check(game.framesPerSecond == 60 &&
@@ -345,6 +361,12 @@ void TestScreenshotDestinationSettings() {
     Check(ScreenshotDestinationSettingValue(ScreenshotDestination::FileAndClipboard) ==
               "file_and_clipboard",
           "screenshot settings serialize file and clipboard");
+    Check(opencapture::ParseScreenshotProfile("avif_smallest") ==
+              opencapture::ScreenshotProfile::AvifSmallest &&
+              opencapture::ScreenshotProfileExtension(opencapture::ScreenshotProfile::JpegCompatible) == L".jpg" &&
+              opencapture::ScreenshotProfileSettingValue(opencapture::ScreenshotProfile::WebpBalanced) ==
+                  "webp_balanced",
+          "screenshot profiles parse, serialize, and select their file extension");
 }
 
 void TestI18nTables() {
