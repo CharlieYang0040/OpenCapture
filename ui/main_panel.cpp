@@ -465,7 +465,7 @@ void DrawTargetPopups(MainPanelState& panel, CaptureTargetPicker& picker, ID3D11
 
 void DrawCaptureTab(MainPanelCommand& command, MainPanelState& panel, CaptureTargetPicker& picker,
                     const ScreenshotUiState& screenshot, std::string_view screenshotStatus,
-                    std::string_view targetOverlayStatus, ID3D11Device* device) {
+                    std::string_view targetOverlayStatus) {
     if (panel.targetType < 0) panel.targetType = static_cast<int>(picker.Selected().type);
     BeginCard("capture-target");
     ImGui::TextUnformatted(Tr(Msg::capture_step_target));
@@ -610,9 +610,7 @@ void DrawCaptureTab(MainPanelCommand& command, MainPanelState& panel, CaptureTar
 
 void DrawEncoderCombo(MainPanelCommand& command, MainPanelState& panel,
                       const std::vector<EncoderUiChoice>& encoderChoices, const char* encoderPreview) {
-    ImGui::TextUnformatted(Tr(Msg::encoder_backend));
-    ImGui::SameLine();
-    if (ImGui::BeginCombo("##VideoEncoderAdvanced", encoderPreview)) {
+    if (ImGui::BeginCombo(Tr(Msg::encoder_backend), encoderPreview)) {
         if (ImGui::Selectable(Tr(Msg::encoder_auto), panel.selectedEncoder == 0)) {
             panel.selectedEncoder = 0;
             command.applyRecordingSettings = true;
@@ -1205,6 +1203,16 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
                                        ImGuiWindowFlags_NoSavedSettings;
     ImGui::Begin("OpenCapture", nullptr, flags);
 
+    constexpr float kMaximumContentWidth = 1200.0F;
+    const float availableWidth = ImGui::GetContentRegionAvail().x;
+    const float contentWidth = std::min(availableWidth, kMaximumContentWidth);
+    if (contentWidth < availableWidth) {
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (availableWidth - contentWidth) * 0.5F);
+    }
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0F, 0.0F, 0.0F, 0.0F));
+    ImGui::BeginChild("MainContent", ImVec2(contentWidth, 0.0F));
+    ImGui::PopStyleColor();
+
     DrawHeader(command, recording, outputDirectory, picker);
     if (recording.active || !recording.outputPath.empty()) DrawStatusBar(recording);
 
@@ -1234,7 +1242,7 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     }
 
     if (panel.activeTab == 0) {
-        DrawCaptureTab(command, panel, picker, screenshot, screenshotStatus, targetOverlayStatus, device);
+        DrawCaptureTab(command, panel, picker, screenshot, screenshotStatus, targetOverlayStatus);
     } else if (panel.activeTab == 1) {
         DrawVideoTab(command, panel, encoderChoices, recording, audioStatus, remuxStatus, mediaBusy);
     } else if (panel.activeTab == 2) {
@@ -1256,6 +1264,7 @@ MainPanelCommand MainPanel::Draw(std::string_view gpuName, std::string_view ffmp
     DrawTargetPopups(panel, picker, device);
     ImGui::Spacing();
     ImGui::TextDisabled("%s", Tr(Msg::footer_ready));
+    ImGui::EndChild();
     ImGui::End();
     CopyRecordingCommand(command, panel, encoderChoices);
     return command;

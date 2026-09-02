@@ -41,6 +41,8 @@ namespace {
 constexpr wchar_t kWindowClass[] = L"OpenCaptureWindow";
 constexpr ULONGLONG kOccludedUiIntervalMs = 100;
 constexpr ULONGLONG kRecordingUiIntervalMs = 100;
+constexpr ULONGLONG kInteractiveUiIntervalMs = 33;
+constexpr ULONGLONG kHoverUiIntervalMs = 50;
 
 #ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
 #define DWMWA_USE_IMMERSIVE_DARK_MODE 20
@@ -50,6 +52,13 @@ constexpr ULONGLONG kRecordingUiIntervalMs = 100;
     // Minimized windows keep WS_VISIBLE, so IsWindowVisible stays TRUE. DXGI also
     // stops waiting for vsync while occluded, which would otherwise busy-loop Present.
     return window != nullptr && IsWindowVisible(window) != FALSE && IsIconic(window) == FALSE;
+}
+
+void WaitForMessagesUntil(ULONGLONG deadline) noexcept {
+    const ULONGLONG now = GetTickCount64();
+    const ULONGLONG remaining = deadline > now ? deadline - now : 0;
+    const DWORD timeout = static_cast<DWORD>(std::min<ULONGLONG>(remaining, MAXDWORD));
+    MsgWaitForMultipleObjectsEx(0, nullptr, timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
 }
 
 std::string ToUtf8(const wchar_t* text) {
@@ -683,7 +692,8 @@ bool Win32D3D11App::Initialize(HINSTANCE instance, int showCommand) {
 
 int Win32D3D11App::Run() {
     MSG message{};
-    ULONGLONG nextRealtimeUiFrame{};
+    ULONGLONG nextInteractiveUiFrame{};
+    ULONGLONG nextRealtimeStatusFrame{};
     bool quitting{};
     uiDirty_ = true;
     while (!quitting) {
@@ -701,33 +711,55 @@ int Win32D3D11App::Run() {
         if (receivedMessage) uiDirty_ = true;
         const bool uiVisible = WindowShowsInteractiveUi(window_);
         const bool backgroundIdle = window_ && !uiVisible &&
-            !RecordingActive() && !pendingScreenshot_ && !mediaJobRunning_;
+            !capture_.IsRunning() && !RecordingActive() && !pendingScreenshot_ && !mediaJobRunning_;
         const bool hasPendingHotkey = pendingHotkeyActions_ != 0;
-        const bool imguiBusy = ImGui::GetCurrentContext() &&
-            (ImGui::IsAnyItemActive() || ImGui::IsAnyItemHovered() ||
-             ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId));
+        const bool realtimePipelineActive = RecordingActive() || pendingScreenshot_;
+        const bool captureWorkActive = capture_.IsRunning() || realtimePipelineActive;
+        const bool imguiItemActive = ImGui::GetCurrentContext() && ImGui::IsAnyItemActive();
+        const bool imguiItemHovered = ImGui::GetCurrentContext() && ImGui::IsAnyItemHovered();
+        const bool imguiPopupOpen = ImGui::GetCurrentContext() &&
+            ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId);
+        const bool imguiAnimating = imguiItemActive || imguiItemHovered || imguiPopupOpen;
         if (backgroundIdle && !hasPendingHotkey && !automatedMode_) {
             WaitMessage();
-        } else if (RecordingActive() || pendingScreenshot_ || mediaJobRunning_) {
-            if (RecordingActive() || pendingScreenshot_) PumpRealtimePipeline();
+        } else if (captureWorkActive || mediaJobRunning_) {
+            if (realtimePipelineActive) {
+                PumpRealtimePipeline();
+            } else if (gpuCropSmokeMode_) {
+                ProcessCaptureFrames();
+            } else if (capture_.IsRunning()) {
+                DrainCaptureFrames();
+            }
             const ULONGLONG now = GetTickCount64();
             const bool presentNow = uiVisible && !swapChainOccluded_ &&
-                (uiDirty_ || now >= nextRealtimeUiFrame);
+                ((uiDirty_ && now >= nextInteractiveUiFrame) || now >= nextRealtimeStatusFrame);
             if (presentNow) {
                 DispatchUi(true);
-                nextRealtimeUiFrame = now + kRecordingUiIntervalMs;
-                uiDirty_ = false;
+                nextInteractiveUiFrame = now + kInteractiveUiIntervalMs;
+                nextRealtimeStatusFrame = now + kRecordingUiIntervalMs;
+                uiDirty_ = imguiAnimating || automatedMode_;
             } else if (hasPendingHotkey || automatedMode_) {
                 DispatchUi(false);
-            } else if (!uiVisible && now >= nextRealtimeUiFrame) {
+            } else if (!uiVisible && now >= nextRealtimeStatusFrame) {
                 DispatchUi(false);
-                nextRealtimeUiFrame = now + kOccludedUiIntervalMs;
+                nextRealtimeStatusFrame = now + kOccludedUiIntervalMs;
             } else {
                 capture_.WaitForFrame(5);
             }
-        } else if (uiVisible && (uiDirty_ || imguiBusy || hasPendingHotkey || automatedMode_)) {
-            DispatchUi(!swapChainOccluded_);
-            uiDirty_ = imguiBusy || automatedMode_;
+        } else if (uiVisible && (uiDirty_ || imguiAnimating || hasPendingHotkey || automatedMode_)) {
+            const ULONGLONG now = GetTickCount64();
+            if (now >= nextInteractiveUiFrame) {
+                DispatchUi(!swapChainOccluded_);
+                const ULONGLONG interval = imguiItemHovered && !imguiItemActive && !imguiPopupOpen
+                    ? kHoverUiIntervalMs
+                    : kInteractiveUiIntervalMs;
+                nextInteractiveUiFrame = now + interval;
+                uiDirty_ = imguiAnimating || automatedMode_;
+            } else if (hasPendingHotkey || automatedMode_) {
+                DispatchUi(false);
+            } else {
+                WaitForMessagesUntil(nextInteractiveUiFrame);
+            }
         } else if (uiVisible) {
             WaitMessage();
         } else {
@@ -2241,6 +2273,11 @@ void Win32D3D11App::ProcessCaptureFrames() {
                 return;
             }
         }
+    }
+}
+
+void Win32D3D11App::DrainCaptureFrames() {
+    while (capture_.TryPopFrame()) {
     }
 }
 
