@@ -88,6 +88,7 @@ OpenCapture는 Windows 10/11을 위한 네이티브 화면 캡처 애플리케�
 
 전체 개발 순서와 성능 기준은 [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md)에서 확인할 수 있습니다.
 최신 녹화 기술 비교와 최적화 근거는 [녹화 기술 심층 검토](docs/recording-technology-review-2026-08-31.md)에 정리했습니다.
+상용 UI 외관과 게임 성능 우선 방향은 [UI 방향 검토](docs/ui-direction-2026-09-02.md)에 정리했습니다.
 
 ## 회사 PC 보안 관련 동작
 
