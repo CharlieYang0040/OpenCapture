@@ -528,6 +528,17 @@ std::optional<CaptureTarget> PickTemporaryRegion(HWND owner);
 2026-09-02 상용 외관 검토에서도 이 판단을 유지한다. WinUI 3, Qt, Slint, WebView2로
 메인 패널을 재작성하지 않는다. 게임 플레이 중 성능이 우선이므로 제품처럼 보이게 만드는
 작업은 테마·글꼴·카드 레이아웃보다 Present 절약과 녹화 중 창 숨김을 먼저 한다.
+
+같은 날짜의 구현은 Dear ImGui를 유지한 채 다음을 적용한다.
+
+- 한/영 문자열 테이블과 Windows `malgun.ttf` 병합. 창 제목 한글은 언어와 무관하게 표시
+- MSVC `/utf-8`로 UTF-8 UI 문자열을 소스 그대로 컴파일
+- OpenCapture 다크 토큰, 카드 레이아웃, 상태 필이 있는 헤더
+- Capture 홈(대상 → 스크린샷), Video 프로필 카드, GIF 단순화, Settings 접이식 그룹
+- 호버·포커스에서 제목+본문 툴팁
+- 유휴 창은 dirty/입력일 때만 Present. 녹화 중 보이는 창은 10Hz. 숨긴 녹화는 Present 생략
+- 스왑체인은 `DXGI_SWAP_EFFECT_FLIP_DISCARD`
+
 상세 비교, 현재 루프 병목, 세 층 아키텍처와 단계별 수용 기준은
 [UI 방향 검토](docs/ui-direction-2026-09-02.md)에 정리한다.
 

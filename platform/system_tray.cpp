@@ -1,6 +1,7 @@
 #include "platform/system_tray.h"
 
 #include "app/resource.h"
+#include "ui/i18n.h"
 
 #include <windowsx.h>
 
@@ -75,15 +76,15 @@ SystemTrayCommand SystemTray::HandleCallback(
 
     HMENU menu = CreatePopupMenu();
     if (!menu) return SystemTrayCommand::None;
-    AppendMenuW(menu, MF_STRING | MF_DEFAULT, kOpenCommand, L"Open OpenCapture");
+    AppendMenuW(menu, MF_STRING | MF_DEFAULT, kOpenCommand, TrW(Msg::tray_open).c_str());
     AppendMenuW(menu,
                 MF_STRING | (quickCaptureAvailable ? MF_ENABLED : MF_GRAYED),
-                kQuickCaptureCommand, L"Quick Capture");
+                kQuickCaptureCommand, TrW(Msg::tray_quick).c_str());
     AppendMenuW(menu,
                 MF_STRING | (recordingActive ? MF_ENABLED : MF_GRAYED),
-                kStopRecordingCommand, L"Stop current recording");
+                kStopRecordingCommand, TrW(Msg::tray_stop).c_str());
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, kExitCommand, L"Exit OpenCapture");
+    AppendMenuW(menu, MF_STRING, kExitCommand, TrW(Msg::tray_exit).c_str());
 
     POINT cursor{};
     GetCursorPos(&cursor);

@@ -2,6 +2,9 @@
 
 #include "app/resource.h"
 #include "ui/main_panel.h"
+#include "ui/fonts.h"
+#include "ui/i18n.h"
+#include "ui/theme.h"
 
 #include <imgui.h>
 #include <imgui_impl_dx11.h>
@@ -37,6 +40,11 @@ namespace {
 
 constexpr wchar_t kWindowClass[] = L"OpenCaptureWindow";
 constexpr ULONGLONG kOccludedUiIntervalMs = 100;
+constexpr ULONGLONG kRecordingUiIntervalMs = 100;
+
+#ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
+#define DWMWA_USE_IMMERSIVE_DARK_MODE 20
+#endif
 
 [[nodiscard]] bool WindowShowsInteractiveUi(HWND window) noexcept {
     // Minimized windows keep WS_VISIBLE, so IsWindowVisible stays TRUE. DXGI also
@@ -286,19 +294,20 @@ void Win32D3D11App::ResetAllSettings() {
     targetPicker_.ResetSelectionSettings();
     screenshotHotkeyDestination_ = ScreenshotDestination::Clipboard;
     if (SaveScreenshotSettings()) {
-        screenshotStatus_ = "Screenshot shortcut result restored to clipboard.";
+        screenshotStatus_ = Tr(Msg::status_screenshot_restored);
     }
     const bool previousTray = closeToTray_;
     closeToTray_ = false;
     if (SaveTraySettings()) {
-        trayStatus_ = "Closing the window now exits OpenCapture.";
+        trayStatus_ = Tr(Msg::status_tray_exit);
     } else {
         closeToTray_ = previousTray;
-        trayStatus_ = "Background setting could not be saved.";
+        trayStatus_ = Tr(Msg::status_tray_save_failed);
     }
     recordingPreferences_ = DefaultRecordingPreferences();
     SaveRecordingSettings();
     globalHotkeys_.ResetDefaults();
+    SetLanguagePreference(DetectOsLanguage());
 }
 
 void Win32D3D11App::BeginHotkeyCapture(int action) {
@@ -371,23 +380,32 @@ void Win32D3D11App::ShowMainWindow() {
     ShowWindow(window_, IsIconic(window_) ? SW_RESTORE : SW_SHOW);
     SetForegroundWindow(window_);
     UpdateWindow(window_);
+    swapChainOccluded_ = false;
+    uiDirty_ = true;
 }
 
 void Win32D3D11App::LoadUiScaleSettings() {
+    language_ = DetectOsLanguage();
     std::ifstream input(UiScaleSettingsPath());
-    if (!input) return;
+    if (!input) {
+        SetLanguage(language_);
+        return;
+    }
     std::string line;
     int percent = uiScalePercent_;
     while (std::getline(input, line)) {
         if (line.rfind("ui_scale_percent=", 0) == 0) {
             std::istringstream value(line.substr(17));
             value >> percent;
+        } else if (line.rfind("language=", 0) == 0) {
+            language_ = ParseLanguage(line.substr(9), language_);
         }
     }
     uiScalePercent_ = ClampUiScalePercent(percent);
+    SetLanguage(language_);
 }
 
-bool Win32D3D11App::SaveUiScaleSettings() const {
+bool Win32D3D11App::SaveUiSettings() const {
     const auto path = UiScaleSettingsPath();
     if (path.empty()) return false;
     const std::filesystem::path temporary(path.wstring() + L".tmp");
@@ -395,23 +413,59 @@ bool Win32D3D11App::SaveUiScaleSettings() const {
         std::ofstream output(temporary, std::ios::trunc);
         if (!output) return false;
         output << "ui_scale_percent=" << uiScalePercent_ << '\n';
+        output << "language=" << LanguageSettingValue(language_) << '\n';
         if (!output) return false;
     }
     return MoveFileExW(temporary.c_str(), path.c_str(),
                        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
 }
 
+bool Win32D3D11App::SaveUiScaleSettings() const { return SaveUiSettings(); }
+
+void Win32D3D11App::ApplyWindowChrome() {
+    if (!window_) return;
+    BOOL dark = TRUE;
+    DwmSetWindowAttribute(window_, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
+}
+
+void Win32D3D11App::RefreshLocalizedChrome() {
+    if (systemTray_.Available()) {
+        trayStatus_ = closeToTray_ ? Tr(Msg::status_tray_default_keep) : Tr(Msg::status_tray_default_exit);
+    } else {
+        trayStatus_ = Tr(Msg::status_tray_unavailable);
+    }
+    fontStatus_ = std::string(Tr(koreanFontLoaded_ ? Msg::font_ok : Msg::font_korean_missing));
+    uiDirty_ = true;
+}
+
 void Win32D3D11App::ApplyUiScale() {
     if (!ImGui::GetCurrentContext()) return;
     effectiveUiScale_ = ComputeUiScale(windowDpi_, uiScalePercent_);
     ImGuiStyle style{};
-    ImGui::StyleColorsDark(&style);
+    ApplyOpenCaptureTheme(style);
     style.ScaleAllSizes(effectiveUiScale_);
     const float windowsScale = static_cast<float>(windowDpi_ == 0 ? 96U : windowDpi_) / 96.0F;
     style.FontScaleDpi = windowsScale;
     style.FontScaleMain = effectiveUiScale_ / windowsScale;
     ImGui::GetStyle() = style;
     uiScaleDirty_ = false;
+    uiDirty_ = true;
+}
+
+bool Win32D3D11App::SetLanguagePreference(Language language) {
+    const auto previous = language_;
+    language_ = language;
+    SetLanguage(language_);
+    if (!SaveUiSettings()) {
+        language_ = previous;
+        SetLanguage(language_);
+        uiScaleStatus_ = Tr(Msg::status_language_failed);
+        uiDirty_ = true;
+        return false;
+    }
+    RefreshLocalizedChrome();
+    uiScaleStatus_ = Tr(Msg::status_language_saved);
+    return true;
 }
 
 bool Win32D3D11App::SetUiScalePercent(int percent) {
@@ -421,10 +475,10 @@ bool Win32D3D11App::SetUiScalePercent(int percent) {
     if (!SaveUiScaleSettings()) {
         uiScalePercent_ = previous;
         uiScaleDirty_ = true;
-        uiScaleStatus_ = "UI scale could not be saved.";
+        uiScaleStatus_ = Tr(Msg::status_scale_failed);
         return false;
     }
-    uiScaleStatus_ = "UI scale saved. Windows monitor scaling remains automatic.";
+    uiScaleStatus_ = Tr(Msg::status_scale_saved);
     return true;
 }
 
@@ -434,7 +488,7 @@ void Win32D3D11App::RefreshWindowDpi() {
     if (dpi != 0 && dpi != windowDpi_) {
         windowDpi_ = dpi;
         uiScaleDirty_ = true;
-        uiScaleStatus_ = "Monitor DPI changed; UI scale updated automatically.";
+        uiScaleStatus_ = Tr(Msg::status_dpi_changed);
     }
 }
 
@@ -512,6 +566,7 @@ bool Win32D3D11App::Initialize(HINSTANCE instance, int showCommand) {
                             CW_USEDEFAULT, CW_USEDEFAULT, initialWidth, initialHeight,
                             nullptr, nullptr, instance_, this);
     if (!window_ || !CreateDeviceAndSwapChain() || !frameProcessor_.Initialize(device_.Get(), context_.Get())) return false;
+    ApplyWindowChrome();
     const UINT createdWindowDpi = GetDpiForWindow(window_);
     windowDpi_ = createdWindowDpi == 0 ? 96 : createdWindowDpi;
     if (!targetOverlay_.Initialize(instance_)) {
@@ -521,11 +576,9 @@ bool Win32D3D11App::Initialize(HINSTANCE instance, int showCommand) {
     }
     globalHotkeys_.Initialize(window_);
     if (systemTray_.Initialize(window_, instance_)) {
-        trayStatus_ = closeToTray_
-            ? "OpenCapture remains available in the notification area after closing."
-            : "Closing the window exits OpenCapture. Enable background mode to keep it in the notification area.";
+        trayStatus_ = closeToTray_ ? Tr(Msg::status_tray_default_keep) : Tr(Msg::status_tray_default_exit);
     } else {
-        trayStatus_ = "Notification area icon unavailable; closing the window exits the app.";
+        trayStatus_ = Tr(Msg::status_tray_unavailable);
     }
     capture_.RequestBorderlessAccess();
 
@@ -533,6 +586,9 @@ bool Win32D3D11App::Initialize(HINSTANCE instance, int showCommand) {
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr;
+    const auto fonts = LoadUiFonts();
+    koreanFontLoaded_ = fonts.koreanLoaded;
+    fontStatus_ = fonts.message;
     ApplyUiScale();
 
     if (!ImGui_ImplWin32_Init(window_) || !ImGui_ImplDX11_Init(device_.Get(), context_.Get())) return false;
@@ -629,8 +685,11 @@ int Win32D3D11App::Run() {
     MSG message{};
     ULONGLONG nextRealtimeUiFrame{};
     bool quitting{};
+    uiDirty_ = true;
     while (!quitting) {
+        bool receivedMessage{};
         while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+            receivedMessage = true;
             if (message.message == WM_QUIT) {
                 quitting = true;
                 break;
@@ -639,37 +698,40 @@ int Win32D3D11App::Run() {
             DispatchMessageW(&message);
         }
         if (quitting) break;
+        if (receivedMessage) uiDirty_ = true;
         const bool uiVisible = WindowShowsInteractiveUi(window_);
         const bool backgroundIdle = window_ && !uiVisible &&
             !RecordingActive() && !pendingScreenshot_ && !mediaJobRunning_;
         const bool hasPendingHotkey = pendingHotkeyActions_ != 0;
-        if (backgroundIdle && !hasPendingHotkey) {
-            if (IsIconic(window_)) {
-                const ULONGLONG now = GetTickCount64();
-                if (now >= nextRealtimeUiFrame) {
-                    Render();
-                    nextRealtimeUiFrame = now + kOccludedUiIntervalMs;
-                } else {
-                    MsgWaitForMultipleObjects(0, nullptr, FALSE,
-                                              static_cast<DWORD>(nextRealtimeUiFrame - now),
-                                              QS_ALLINPUT);
-                }
-            } else {
-                WaitMessage();
-            }
-        } else if (RecordingActive() || pendingScreenshot_) {
-            PumpRealtimePipeline();
+        const bool imguiBusy = ImGui::GetCurrentContext() &&
+            (ImGui::IsAnyItemActive() || ImGui::IsAnyItemHovered() ||
+             ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId));
+        if (backgroundIdle && !hasPendingHotkey && !automatedMode_) {
+            WaitMessage();
+        } else if (RecordingActive() || pendingScreenshot_ || mediaJobRunning_) {
+            if (RecordingActive() || pendingScreenshot_) PumpRealtimePipeline();
             const ULONGLONG now = GetTickCount64();
-            if (now >= nextRealtimeUiFrame || hasPendingHotkey) {
-                Render();
-                // Hidden, minimized, or tray recording still needs periodic command,
-                // safety-limit, and smoke-test handling, but not a full-rate UI render.
-                nextRealtimeUiFrame = now + (uiVisible ? 16 : kOccludedUiIntervalMs);
+            const bool presentNow = uiVisible && !swapChainOccluded_ &&
+                (uiDirty_ || now >= nextRealtimeUiFrame);
+            if (presentNow) {
+                DispatchUi(true);
+                nextRealtimeUiFrame = now + kRecordingUiIntervalMs;
+                uiDirty_ = false;
+            } else if (hasPendingHotkey || automatedMode_) {
+                DispatchUi(false);
+            } else if (!uiVisible && now >= nextRealtimeUiFrame) {
+                DispatchUi(false);
+                nextRealtimeUiFrame = now + kOccludedUiIntervalMs;
             } else {
                 capture_.WaitForFrame(5);
             }
+        } else if (uiVisible && (uiDirty_ || imguiBusy || hasPendingHotkey || automatedMode_)) {
+            DispatchUi(!swapChainOccluded_);
+            uiDirty_ = imguiBusy || automatedMode_;
+        } else if (uiVisible) {
+            WaitMessage();
         } else {
-            Render();
+            WaitMessage();
         }
     }
     return captureSmokeFailed_ ? 2 : static_cast<int>(message.wParam);
@@ -683,7 +745,7 @@ bool Win32D3D11App::CreateDeviceAndSwapChain() {
     description.OutputWindow = window_;
     description.SampleDesc.Count = 1;
     description.Windowed = TRUE;
-    description.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+    description.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
 
     D3D_FEATURE_LEVEL selectedLevel{};
     constexpr std::array requestedLevels{D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0};
@@ -876,7 +938,7 @@ bool Win32D3D11App::ChooseOutputDirectory() {
     DWORD options{};
     dialog->GetOptions(&options);
     dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
-    dialog->SetTitle(L"Choose OpenCapture output folder");
+    dialog->SetTitle(TrW(Msg::choose_output_folder).c_str());
     Microsoft::WRL::ComPtr<IShellItem> current;
     if (!outputDirectory_.empty() &&
         SUCCEEDED(SHCreateItemFromParsingName(outputDirectory_.c_str(), nullptr, IID_PPV_ARGS(&current)))) {
@@ -2195,113 +2257,122 @@ void Win32D3D11App::PumpRealtimePipeline() {
     }
 }
 
-void Win32D3D11App::Render() {
+void Win32D3D11App::DispatchUi(bool present) {
     PollMediaJob();
     RefreshWindowDpi();
     if (uiScaleDirty_) ApplyUiScale();
-    ImGui_ImplDX11_NewFrame();
-    ImGui_ImplWin32_NewFrame();
-    ImGui::NewFrame();
 
-    const auto recordingPhase = recordingState_.Phase();
-    const auto recordingError = recordingState_.Error();
-    std::error_code recordingPathError;
-    const bool canRemux = recordingPhase == SessionPhase::Idle &&
-        std::filesystem::path(ToWide(recordingPath_)).extension() == L".mkv" &&
-        std::filesystem::is_regular_file(std::filesystem::path(ToWide(recordingPath_)), recordingPathError) &&
-        !recordingPathError;
-    const RecordingUiState recordingUi{
-        RecordingActive(), recordingPhase == SessionPhase::Starting,
-        recordingPhase == SessionPhase::Paused, RecordingActive() && recordingGif_,
-        canRemux, mediaJobRunning_.load(),
-        mediaWorker_.joinable() && mediaWorker_.get_stop_token().stop_requested(),
-        mediaProgress_.load(), recordingPath_, recordingError,
-        activeEncoderName_, recordingFrameCount_, recordingSourceFrameCount_,
-        recordingSkippedFrameTicks_, capture_.DroppedFrameCount(),
-        recordingProcessingDroppedFrameCount_, recordingEncoderDroppedFrameCount_,
-        recordingEncoderQueuePeak_, muxer_.MaxQueuedPacketCount(),
-        recordingMaximumSourceGapMilliseconds_, recordingMaximumEncodeSubmissionMilliseconds_,
-        recordingElapsedSeconds_,
-        recordingOutputSize_.cx, recordingOutputSize_.cy, recordingBitRate_};
-    std::vector<EncoderUiChoice> encoderChoices;
-    for (const auto& capability : encoderRegistry_.Capabilities()) {
-        encoderChoices.push_back({capability.name, capability.displayName, capability.usable,
-                                  capability.detail, ToCodecPreference(capability.codec)});
+    MainPanelCommand command{};
+    if (present && renderTarget_) {
+        ImGui_ImplDX11_NewFrame();
+        ImGui_ImplWin32_NewFrame();
+        ImGui::NewFrame();
+
+        const auto recordingPhase = recordingState_.Phase();
+        const auto recordingError = recordingState_.Error();
+        std::error_code recordingPathError;
+        const bool canRemux = recordingPhase == SessionPhase::Idle &&
+            std::filesystem::path(ToWide(recordingPath_)).extension() == L".mkv" &&
+            std::filesystem::is_regular_file(std::filesystem::path(ToWide(recordingPath_)), recordingPathError) &&
+            !recordingPathError;
+        const RecordingUiState recordingUi{
+            RecordingActive(), recordingPhase == SessionPhase::Starting,
+            recordingPhase == SessionPhase::Paused, RecordingActive() && recordingGif_,
+            canRemux, mediaJobRunning_.load(),
+            mediaWorker_.joinable() && mediaWorker_.get_stop_token().stop_requested(),
+            mediaProgress_.load(), recordingPath_, recordingError,
+            activeEncoderName_, recordingFrameCount_, recordingSourceFrameCount_,
+            recordingSkippedFrameTicks_, capture_.DroppedFrameCount(),
+            recordingProcessingDroppedFrameCount_, recordingEncoderDroppedFrameCount_,
+            recordingEncoderQueuePeak_, muxer_.MaxQueuedPacketCount(),
+            recordingMaximumSourceGapMilliseconds_, recordingMaximumEncodeSubmissionMilliseconds_,
+            recordingElapsedSeconds_,
+            recordingOutputSize_.cx, recordingOutputSize_.cy, recordingBitRate_};
+        std::vector<EncoderUiChoice> encoderChoices;
+        for (const auto& capability : encoderRegistry_.Capabilities()) {
+            encoderChoices.push_back({capability.name, capability.displayName, capability.usable,
+                                      capability.detail, ToCodecPreference(capability.codec)});
+        }
+        HotkeyUiState hotkeyUi{};
+        const auto& hotkeyBindings = globalHotkeys_.Bindings();
+        for (std::size_t index = 0; index < hotkeyBindings.size(); ++index) {
+            hotkeyUi.labels[index] = globalHotkeys_.Label(static_cast<HotkeyAction>(index));
+        }
+        hotkeyUi.error = globalHotkeys_.LastError();
+        hotkeyUi.capturingAction = capturingHotkeyAction_;
+        const auto& borderSettings = targetOverlay_.Settings();
+        const BorderUiState borderUi{
+            borderSettings.visible,
+            borderSettings.thickness,
+            borderSettings.opacityPercent,
+        };
+        const RegionSelectionUiState regionSelectionUi{
+            targetPicker_.SelectionSettings().outsideDimmingPercent,
+        };
+        const DisplayUiState displayUi{
+            static_cast<int>(std::lround(static_cast<double>(windowDpi_) * 100.0 / 96.0)),
+            uiScalePercent_,
+            static_cast<int>(std::lround(effectiveUiScale_ * 100.0F)),
+            language_,
+            uiScaleStatus_,
+            fontStatus_,
+        };
+        const ScreenshotUiState screenshotUi{
+            screenshotHotkeyDestination_,
+        };
+        const TrayUiState trayUi{
+            systemTray_.Available(),
+            closeToTray_,
+            trayStatus_,
+        };
+        std::string overlayStatus = targetOverlayStatus_;
+        const auto borderlessStatus = capture_.BorderlessStatus();
+        if (!borderlessStatus.empty()) {
+            if (!overlayStatus.empty()) overlayStatus += " | ";
+            overlayStatus += borderlessStatus;
+        }
+        command = MainPanel::Draw(gpuName_, ffmpegVersion_, encoderSummary_, encoderChoices, frameProcessingError_,
+                                  screenshotStatus_, overlayStatus, audioStatus_, recoveryStatus_, remuxStatus_, gifStatus_,
+                                  outputDirectoryUtf8_,
+                                  recoverableRecordings_,
+                                  recordingUi, recordingPreferences_, hotkeyUi, borderUi, regionSelectionUi, displayUi,
+                                  screenshotUi, trayUi,
+                                  targetPicker_, capture_, device_.Get());
+        ApplyMainPanelCommand(command);
     }
-    HotkeyUiState hotkeyUi{};
-    const auto& hotkeyBindings = globalHotkeys_.Bindings();
-    for (std::size_t index = 0; index < hotkeyBindings.size(); ++index) {
-        hotkeyUi.labels[index] = globalHotkeys_.Label(static_cast<HotkeyAction>(index));
-    }
-    hotkeyUi.error = globalHotkeys_.LastError();
-    hotkeyUi.capturingAction = capturingHotkeyAction_;
-    const auto& borderSettings = targetOverlay_.Settings();
-    const BorderUiState borderUi{
-        borderSettings.visible,
-        borderSettings.thickness,
-        borderSettings.opacityPercent,
-    };
-    const RegionSelectionUiState regionSelectionUi{
-        targetPicker_.SelectionSettings().outsideDimmingPercent,
-    };
-    const DisplayUiState displayUi{
-        static_cast<int>(std::lround(static_cast<double>(windowDpi_) * 100.0 / 96.0)),
-        uiScalePercent_,
-        static_cast<int>(std::lround(effectiveUiScale_ * 100.0F)),
-        uiScaleStatus_,
-    };
-    const ScreenshotUiState screenshotUi{
-        screenshotHotkeyDestination_,
-    };
-    const TrayUiState trayUi{
-        systemTray_.Available(),
-        closeToTray_,
-        trayStatus_,
-    };
-    std::string overlayStatus = targetOverlayStatus_;
-    const auto borderlessStatus = capture_.BorderlessStatus();
-    if (!borderlessStatus.empty()) {
-        if (!overlayStatus.empty()) overlayStatus += " | ";
-        overlayStatus += borderlessStatus;
-    }
-    const auto command = MainPanel::Draw(gpuName_, ffmpegVersion_, encoderSummary_, encoderChoices, frameProcessingError_,
-                                         screenshotStatus_, overlayStatus, audioStatus_, recoveryStatus_, remuxStatus_, gifStatus_,
-                                         outputDirectoryUtf8_,
-                                         recoverableRecordings_,
-                                         recordingUi, recordingPreferences_, hotkeyUi, borderUi, regionSelectionUi, displayUi,
-                                         screenshotUi, trayUi,
-                                         targetPicker_, capture_, device_.Get());
-    if (command.applyUiScale) {
-        SetUiScalePercent(command.uiScalePercent);
-    }
-    if (command.resetUiScale) {
-        SetUiScalePercent(100);
-    }
-    if (command.selectRegion) {
-        RunRegionSelection(true);
-    }
+    ProcessPendingHotkeys();
+    UpdateTargetOverlay();
+    HandleSmokeTests();
+    if (present && renderTarget_) PresentUi();
+}
+
+void Win32D3D11App::ApplyMainPanelCommand(const MainPanelCommand& command) {
+    if (command.applyLanguage) SetLanguagePreference(command.language);
+    if (command.applyUiScale) SetUiScalePercent(command.uiScalePercent);
+    if (command.resetUiScale) SetUiScalePercent(100);
+    if (command.selectRegion) RunRegionSelection(true);
     if (command.quickCapture) StartQuickCapture();
     if (command.applyScreenshotShortcutDestination) {
         const auto previous = screenshotHotkeyDestination_;
         screenshotHotkeyDestination_ = command.screenshotShortcutDestination;
         if (SaveScreenshotSettings()) {
-            screenshotStatus_ = "Screenshot shortcut result saved.";
+            screenshotStatus_ = Tr(Msg::status_screenshot_setting_saved);
         } else {
             screenshotHotkeyDestination_ = previous;
-            screenshotStatus_ = "Screenshot shortcut result could not be saved.";
+            screenshotStatus_ = Tr(Msg::status_screenshot_setting_failed);
         }
+        uiDirty_ = true;
     }
     if (command.applyCloseToTray) {
         const bool previous = closeToTray_;
         closeToTray_ = command.closeToTray;
         if (SaveTraySettings()) {
-            trayStatus_ = closeToTray_
-                ? "Closing the window now keeps OpenCapture in the notification area."
-                : "Closing the window now exits OpenCapture.";
+            trayStatus_ = closeToTray_ ? Tr(Msg::status_tray_keep) : Tr(Msg::status_tray_exit);
         } else {
             closeToTray_ = previous;
-            trayStatus_ = "Background setting could not be saved.";
+            trayStatus_ = Tr(Msg::status_tray_save_failed);
         }
+        uiDirty_ = true;
     }
     if (command.applyBorderSettings) {
         targetOverlay_.ApplySettings({
@@ -2310,23 +2381,25 @@ void Win32D3D11App::Render() {
             command.borderOpacityPercent,
         });
         targetOverlayStatus_ = targetOverlay_.LastError();
+        uiDirty_ = true;
     }
     if (command.resetBorderSettings) {
         targetOverlay_.ResetSettings();
         targetOverlayStatus_ = targetOverlay_.LastError();
+        uiDirty_ = true;
     }
     if (command.applyRegionSelectionSettings) {
         targetPicker_.ApplySelectionSettings({
             command.regionOutsideDimmingPercent,
         });
+        uiDirty_ = true;
     }
     if (command.resetRegionSelectionSettings) {
         targetPicker_.ResetSelectionSettings();
+        uiDirty_ = true;
     }
     if (command.cancelHotkeyCapture) CancelHotkeyCapture();
-    if (command.listenHotkeyAction >= 0) {
-        BeginHotkeyCapture(command.listenHotkeyAction);
-    }
+    if (command.listenHotkeyAction >= 0) BeginHotkeyCapture(command.listenHotkeyAction);
     if (command.changeHotkeyAction >= 0 &&
         command.changeHotkeyAction < static_cast<int>(HotkeyAction::Count)) {
         globalHotkeys_.SetBinding(
@@ -2352,15 +2425,26 @@ void Win32D3D11App::Render() {
         ApplyRecordingPreferencesFromCommand(command);
         StartRecording(command.framesPerSecond, command.quality, command.encoderName,
                        command.systemAudio, command.microphone, command.remuxToMp4);
+        uiDirty_ = true;
     }
     if (command.startGif && !mediaJobRunning_) {
         ApplyRecordingPreferencesFromCommand(command);
         StartRecording(command.gifFramesPerSecond, 0, command.encoderName,
                        false, false, false, true, command.gifHeight, command.gifColors);
+        uiDirty_ = true;
     }
-    if (command.stopRecording) StopRecording();
-    if (command.pauseRecording) PauseRecording();
-    if (command.resumeRecording) ResumeRecording();
+    if (command.stopRecording) {
+        StopRecording();
+        uiDirty_ = true;
+    }
+    if (command.pauseRecording) {
+        PauseRecording();
+        uiDirty_ = true;
+    }
+    if (command.resumeRecording) {
+        ResumeRecording();
+        uiDirty_ = true;
+    }
     if (command.remuxLastRecording) RemuxRecordingToMp4(recordingPath_);
     if (command.cancelMediaJob) CancelMediaJob();
     if (command.copyScreenshot) StartScreenshot({
@@ -2375,9 +2459,12 @@ void Win32D3D11App::Render() {
         ScreenshotDestination::FileAndClipboard, targetPicker_.Selected(),
         ScreenshotRequestOrigin::MainPanel,
     });
+}
 
+void Win32D3D11App::ProcessPendingHotkeys() {
     const std::uint32_t hotkeyActions = pendingHotkeyActions_;
     pendingHotkeyActions_ = 0;
+    if (hotkeyActions != 0) uiDirty_ = true;
     if ((hotkeyActions & (1U << static_cast<unsigned>(HotkeyAction::Screenshot))) != 0) {
         StartScreenshot({
             screenshotHotkeyDestination_, targetPicker_.Selected(),
@@ -2388,21 +2475,26 @@ void Win32D3D11App::Render() {
         if (RecordingActive()) {
             StopRecording();
         } else if (!mediaJobRunning_) {
-            StartRecording(command.framesPerSecond, command.quality, command.encoderName,
-                           command.systemAudio, command.microphone, command.remuxToMp4);
+            StartRecording(recordingPreferences_.framesPerSecond, recordingPreferences_.quality,
+                           recordingPreferences_.encoderName, recordingPreferences_.systemAudio,
+                           recordingPreferences_.microphone, recordingPreferences_.remuxToMp4);
         }
     }
     if ((hotkeyActions & (1U << static_cast<unsigned>(HotkeyAction::ToggleGifRecording))) != 0) {
         if (RecordingActive()) {
             StopRecording();
         } else if (!mediaJobRunning_) {
-            StartRecording(command.gifFramesPerSecond, 0, command.encoderName,
-                           false, false, false, true, command.gifHeight, command.gifColors);
+            StartRecording(recordingPreferences_.gifFramesPerSecond, 0, recordingPreferences_.encoderName,
+                           false, false, false, true, recordingPreferences_.gifHeight,
+                           recordingPreferences_.gifColors);
         }
     }
     if ((hotkeyActions & (1U << static_cast<unsigned>(HotkeyAction::QuickCapture))) != 0) {
         StartQuickCapture();
     }
+}
+
+void Win32D3D11App::UpdateTargetOverlay() {
     CaptureOverlayState overlayState = CaptureOverlayState::Idle;
     const auto currentPhase = recordingState_.Phase();
     if (currentPhase == SessionPhase::Paused) {
@@ -2416,7 +2508,9 @@ void Win32D3D11App::Render() {
         overlayState = CaptureOverlayState::Error;
     }
     targetOverlay_.Update(targetPicker_.Selected(), overlayState);
+}
 
+void Win32D3D11App::HandleSmokeTests() {
     if (captureSmokeMode_ &&
         ((!gpuCropSmokeMode_ && capture_.FrameCount() >= 1) ||
          (gpuCropSmokeMode_ && !gpuNv12SmokeMode_ && processedFrameCount_ >= 1) ||
@@ -2468,15 +2562,22 @@ void Win32D3D11App::Render() {
             if (!gifRecordSmokeMode_) PostMessageW(window_, WM_CLOSE, 0, 0);
         }
     }
+}
 
+void Win32D3D11App::PresentUi() {
     ImGui::Render();
     constexpr float clearColor[4]{0.055F, 0.065F, 0.08F, 1.0F};
     context_->OMSetRenderTargets(1, renderTarget_.GetAddressOf(), nullptr);
     context_->ClearRenderTargetView(renderTarget_.Get(), clearColor);
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-    const UINT syncInterval = (RecordingActive() || pendingScreenshot_ ||
+    const UINT syncInterval = (RecordingActive() || pendingScreenshot_ || mediaJobRunning_ ||
                                !WindowShowsInteractiveUi(window_)) ? 0U : 1U;
     const HRESULT presentResult = swapChain_->Present(syncInterval, 0);
+    if (presentResult == DXGI_STATUS_OCCLUDED) {
+        swapChainOccluded_ = true;
+    } else {
+        swapChainOccluded_ = false;
+    }
     if (presentResult == DXGI_ERROR_DEVICE_REMOVED || presentResult == DXGI_ERROR_DEVICE_RESET ||
         presentResult == DXGI_ERROR_DEVICE_HUNG) {
         HandleDeviceFailure(presentResult);
@@ -2532,8 +2633,9 @@ LRESULT CALLBACK Win32D3D11App::WindowProc(HWND window, UINT message, WPARAM wPa
     if (app && app->systemTray_.TaskbarCreatedMessage() != 0 &&
         message == app->systemTray_.TaskbarCreatedMessage()) {
         app->trayStatus_ = app->systemTray_.Restore()
-            ? "Notification area icon restored after Explorer restarted."
-            : "Notification area icon could not be restored; closing the window exits the app.";
+            ? Tr(Msg::status_tray_restored)
+            : Tr(Msg::status_tray_restore_failed);
+        app->uiDirty_ = true;
         return 0;
     }
     switch (message) {
@@ -2577,7 +2679,8 @@ LRESULT CALLBACK Win32D3D11App::WindowProc(HWND window, UINT message, WPARAM wPa
             const UINT dpi = LOWORD(wParam);
             if (dpi != 0) app->windowDpi_ = dpi;
             app->uiScaleDirty_ = true;
-            app->uiScaleStatus_ = "Monitor DPI changed; UI scale updated automatically.";
+            app->uiScaleStatus_ = Tr(Msg::status_dpi_changed);
+            app->uiDirty_ = true;
         }
         const auto* suggested = reinterpret_cast<const RECT*>(lParam);
         if (suggested) {
@@ -2589,7 +2692,9 @@ LRESULT CALLBACK Win32D3D11App::WindowProc(HWND window, UINT message, WPARAM wPa
         return 0;
     }
     case WM_SIZE:
+        if (app) app->uiDirty_ = true;
         if (wParam != SIZE_MINIMIZED) {
+            if (app) app->swapChainOccluded_ = false;
             if (app && app->swapChain_) {
                 app->CleanupRenderTarget();
                 app->swapChain_->ResizeBuffers(0, LOWORD(lParam), HIWORD(lParam), DXGI_FORMAT_UNKNOWN, 0);
@@ -2604,7 +2709,8 @@ LRESULT CALLBACK Win32D3D11App::WindowProc(HWND window, UINT message, WPARAM wPa
         if (app && app->closeToTray_ && app->systemTray_.Available() &&
             !app->exitRequested_ && !app->automatedMode_) {
             ShowWindow(window, SW_HIDE);
-            app->trayStatus_ = "OpenCapture is running in the notification area.";
+            app->trayStatus_ = Tr(Msg::status_tray_running);
+            app->uiDirty_ = true;
             return 0;
         }
         break;

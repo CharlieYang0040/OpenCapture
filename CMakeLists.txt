@@ -17,6 +17,19 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+if(MSVC)
+    add_compile_options(/utf-8)
+endif()
+
+add_library(opencapture_i18n STATIC
+    ui/i18n.cpp
+)
+target_include_directories(opencapture_i18n PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(opencapture_i18n PUBLIC UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+if(MSVC)
+    target_compile_options(opencapture_i18n PRIVATE /W4 /permissive- /Zc:__cplusplus)
+endif()
+
 add_library(opencapture_core STATIC
     core/capture_target.cpp
     core/hotkey.cpp
@@ -76,12 +89,16 @@ if(OPENCAPTURE_BUILD_APP)
         platform/system_tray.cpp
         platform/windows_graphics_capture.cpp
         platform/win32_d3d11_app.cpp
+        ui/fonts.cpp
         ui/main_panel.cpp
+        ui/theme.cpp
+        ui/tooltips.cpp
     )
     target_include_directories(OpenCapture PRIVATE ${FFMPEG_INCLUDE_DIR})
     target_link_libraries(OpenCapture PRIVATE
         opencapture_core
         opencapture_audio
+        opencapture_i18n
         imgui::imgui
         ${AVUTIL_LIBRARY}
         ${AVCODEC_LIBRARY}
@@ -139,7 +156,7 @@ endif()
 if(OPENCAPTURE_BUILD_TESTS)
     enable_testing()
     add_executable(opencapture_core_tests tests/core_tests.cpp)
-    target_link_libraries(opencapture_core_tests PRIVATE opencapture_core)
+    target_link_libraries(opencapture_core_tests PRIVATE opencapture_core opencapture_i18n)
     if(MSVC)
         target_compile_options(opencapture_core_tests PRIVATE /W4 /permissive- /Zc:__cplusplus)
     endif()
