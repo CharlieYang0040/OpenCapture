@@ -87,6 +87,7 @@ Not implemented or still pending hardware validation:
   D3D11 encoder when recording starts and Auto falls back to the next compatible codec
 
 See [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md) for the roadmap and performance acceptance criteria.
+The commercial UI direction and in-game performance constraints are in the [UI direction review](docs/ui-direction-2026-09-02.md).
 
 ## Company-PC security behavior
 
