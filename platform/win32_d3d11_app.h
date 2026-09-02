@@ -64,6 +64,7 @@ private:
     void CreateRenderTarget();
     void CleanupRenderTarget();
     void HandleDeviceFailure(HRESULT result);
+    void DrainCaptureFrames();
     void ProcessCaptureFrames();
     void PumpRealtimePipeline();
     bool ProcessRecordingFrame(CapturedFrame frame);
