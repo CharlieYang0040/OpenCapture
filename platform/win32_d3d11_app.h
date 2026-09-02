@@ -105,6 +105,7 @@ private:
     bool RunScreenshotSmoke();
     void HandleHotkey(HotkeyAction action);
     void LoadUiScaleSettings();
+    bool SaveUiSettings() const;
     bool SaveUiScaleSettings() const;
     void LoadScreenshotSettings();
     bool SaveScreenshotSettings() const;
@@ -121,8 +122,16 @@ private:
     void ShowMainWindow();
     void ApplyUiScale();
     bool SetUiScalePercent(int percent);
+    bool SetLanguagePreference(Language language);
+    void RefreshLocalizedChrome();
+    void ApplyWindowChrome();
     void RefreshWindowDpi();
-    void Render();
+    void DispatchUi(bool present);
+    void PresentUi();
+    void ApplyMainPanelCommand(const MainPanelCommand& command);
+    void ProcessPendingHotkeys();
+    void UpdateTargetOverlay();
+    void HandleSmokeTests();
     void Shutdown();
 
     HINSTANCE instance_{};
@@ -222,6 +231,11 @@ private:
     float effectiveUiScale_{1.0F};
     bool uiScaleDirty_{true};
     std::string uiScaleStatus_;
+    bool uiDirty_{true};
+    bool swapChainOccluded_{};
+    Language language_{Language::English};
+    std::string fontStatus_;
+    bool koreanFontLoaded_{true};
     WindowsGraphicsCapture capture_;
     bool captureSmokeMode_{};
     bool gpuCropSmokeMode_{};

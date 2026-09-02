@@ -8,6 +8,7 @@
 
 #include "core/recording_options.h"
 #include "core/screenshot_options.h"
+#include "ui/i18n.h"
 
 struct ID3D11Device;
 
@@ -88,7 +89,9 @@ struct DisplayUiState {
     int windowsDpiPercent{100};
     int userScalePercent{100};
     int effectiveScalePercent{100};
+    Language language{Language::English};
     std::string_view status;
+    std::string_view fontStatus;
 };
 
 struct MainPanelCommand {
@@ -123,6 +126,8 @@ struct MainPanelCommand {
     bool resetRegionSelectionSettings{};
     bool applyUiScale{};
     bool resetUiScale{};
+    bool applyLanguage{};
+    Language language{Language::English};
     bool applyRecordingSettings{};
     bool resetVideoSettings{};
     bool resetGifSettings{};

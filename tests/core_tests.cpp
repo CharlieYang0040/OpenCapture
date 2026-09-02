@@ -5,6 +5,7 @@
 #include "core/screenshot_options.h"
 #include "core/session_state.h"
 #include "core/ui_scale.h"
+#include "ui/i18n.h"
 
 #include <iostream>
 #include <string>
@@ -346,7 +347,34 @@ void TestScreenshotDestinationSettings() {
           "screenshot settings serialize file and clipboard");
 }
 
-} // namespace
+void TestI18nTables() {
+    using opencapture::JoinStatus;
+    using opencapture::Language;
+    using opencapture::LanguageSettingValue;
+    using opencapture::Msg;
+    using opencapture::ParseLanguage;
+    using opencapture::SetLanguage;
+    using opencapture::StringTableCount;
+    using opencapture::StringTablesComplete;
+    using opencapture::Tr;
+    Check(StringTablesComplete(), "english and korean string tables are complete");
+    Check(StringTableCount() == static_cast<std::size_t>(Msg::Count),
+          "string table count matches Msg::Count");
+    Check(ParseLanguage("ko", Language::English) == Language::Korean, "parse ko");
+    Check(ParseLanguage("en", Language::Korean) == Language::English, "parse en");
+    Check(ParseLanguage("nope", Language::Korean) == Language::Korean, "parse fallback");
+    Check(std::string(LanguageSettingValue(Language::Korean)) == "ko", "serialize ko");
+    SetLanguage(Language::English);
+    const std::string englishReady = Tr(Msg::status_ready);
+    SetLanguage(Language::Korean);
+    const std::string koreanReady = Tr(Msg::status_ready);
+    Check(englishReady == "Ready", "english ready label");
+    Check(koreanReady == "준비됨", "korean ready label");
+    Check(englishReady != koreanReady, "english and korean labels differ");
+    Check(JoinStatus(Msg::header_output, "C:\\out").find("C:\\out") != std::string::npos,
+          "status join keeps path");
+    SetLanguage(Language::English);
+}
 
 int main() {
     TestBoundedQueue();
@@ -361,6 +389,7 @@ int main() {
     TestHotkeyChords();
     TestRecordingPreferences();
     TestScreenshotDestinationSettings();
+    TestI18nTables();
     if (failures == 0) std::cout << "All OpenCapture core tests passed.\n";
     return failures == 0 ? 0 : 1;
 }
